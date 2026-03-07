@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/twilio",
+  "version": "1.0.0",
+  "description": "OpenClaw Twilio channel plugin (SMS/MMS/RCS/Group)",
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1",
+    "openclaw": "*",
+    "sqlite3": "^5.1.7",
+    "twilio": "^5.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "twilio",
+      "label": "Twilio SMS/MMS/RCS",
+      "selectionLabel": "Twilio (SMS/MMS/RCS/Group)",
+      "docsPath": "/channels/twilio",
+      "docsLabel": "twilio",
+      "blurb": "SMS, MMS, RCS, and Group messaging via Twilio.",
+      "aliases": [
+        "sms",
+        "mms",
+        "rcs"
+      ],
+      "order": 50
+    },
+    "install": {
+      "npmSpec": "@openclaw/twilio",
+      "localPath": "extensions/twilio",
+      "defaultChoice": "npm"
+    }
+  }
+}

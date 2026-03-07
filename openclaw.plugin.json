@@ -1,0 +1,9 @@
+{
+  "id": "twilio",
+  "channels": ["twilio"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
