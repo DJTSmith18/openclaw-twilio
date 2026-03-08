@@ -32,10 +32,9 @@ backup_config() {
 }
 
 update_twilio_config() {
-  local filter="$1"
   local tmp
   tmp=$(mktemp)
-  jq "$filter" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+  jq "$@" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
 }
 
 prompt() {
