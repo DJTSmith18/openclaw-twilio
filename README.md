@@ -25,6 +25,41 @@ SMS, MMS, RCS, and Group messaging channel for [OpenClaw](https://github.com/ope
 
 ## Quick Start
 
+### Option 1 — Remote install (recommended)
+
+One command on the destination machine. No manual cloning or tarball extraction required.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash
+```
+
+The script will:
+1. Detect your OpenClaw installation (prompts for the base directory if not found at `~/.openclaw`)
+2. Clone the repository into `<openclaw-base>/extensions/twilio`
+3. Launch the interactive installer automatically
+
+**Pin to a specific branch or tag:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --branch v1.0.1
+```
+
+**Install to a custom directory:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --dir /opt/openclaw/extensions/twilio
+```
+
+After installation, restart OpenClaw:
+
+```bash
+openclaw restart
+```
+
+---
+
+### Option 2 — Manual install
+
 ```bash
 # Clone into your extensions directory
 cd ~/.openclaw/extensions
@@ -37,6 +72,8 @@ bash scripts/install.sh
 # Restart OpenClaw
 openclaw restart
 ```
+
+---
 
 The installer will walk you through:
 
@@ -248,6 +285,16 @@ When `webhook.baseUrl` is configured, the plugin validates the `X-Twilio-Signatu
 
 ## Scripts
 
+### `scripts/remote-install.sh`
+
+One-liner remote installer. Detects OpenClaw, clones the repo, and launches `install.sh` automatically. Intended to be fetched and run via `curl` — see [Quick Start](#quick-start).
+
+```bash
+# Options
+bash scripts/remote-install.sh --branch <branch>   # pin to branch/tag (default: main)
+bash scripts/remote-install.sh --dir <path>         # custom plugin directory
+```
+
 ### `scripts/install.sh`
 
 Interactive installer that configures credentials, DIDs, webhooks, policies, agent bindings, and the SQLite database.
@@ -292,6 +339,7 @@ twilio/
 ├── openclaw.plugin.json          # Plugin manifest
 ├── package.json                  # Dependencies + openclaw metadata
 ├── scripts/
+│   ├── remote-install.sh         # curl-friendly remote installer
 │   ├── install.sh                # Interactive installer
 │   ├── manage.sh                 # TUI management console
 │   ├── uninstall.sh              # Clean removal

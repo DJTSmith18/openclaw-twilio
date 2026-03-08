@@ -4,8 +4,8 @@
 set -euo pipefail
 
 PLUGIN_ID="twilio"
-PLUGIN_DIR="$HOME/.openclaw/extensions/twilio"
-CONFIG_FILE="$HOME/.openclaw/openclaw.json"
+PLUGIN_DIR="${PLUGIN_DIR:-$HOME/.openclaw/extensions/twilio}"
+CONFIG_FILE="${CONFIG_FILE:-$HOME/.openclaw/openclaw.json}"
 DEFAULT_DB_PATH="$HOME/.openclaw/shared/sms.db"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
