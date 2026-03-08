@@ -4,6 +4,7 @@ import { resolveTwilioAccountByDid } from "./accounts.js";
 import { normalizeE164 } from "./normalize.js";
 import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
 import { getTwilioRuntime } from "./runtime.js";
+import { sendTwilioMessage } from "./send.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
@@ -190,7 +191,13 @@ export async function handleInboundMessage(
       : `twilio:${normalizedFrom}`;
 
   try {
-    const core = runtime as any;
+    // Resolve agent route
+    const route = runtime.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "twilio",
+      accountId,
+      peer: { kind: chatType === "group" ? "group" : "user", id: normalizedFrom },
+    });
 
     // Build the inbound context
     const inboundCtx: Record<string, unknown> = {
@@ -199,8 +206,9 @@ export async function handleInboundMessage(
       CommandBody: messageText,
       From: fromAddress,
       To: normalizedTo ?? to,
-      SessionKey: sessionKey,
+      SessionKey: route.sessionKey,
       AccountId: accountId,
+      AgentId: route.agentId,
       ChatType: chatType,
       SenderName: (contactInfo as any)?.name ?? normalizedFrom,
       SenderId: normalizedFrom,
@@ -211,6 +219,7 @@ export async function handleInboundMessage(
       Timestamp: Date.now(),
       OriginatingChannel: "twilio",
       OriginatingTo: normalizedTo ?? to,
+      OriginatingAccountId: accountId,
     };
 
     // Add media payload
@@ -220,52 +229,51 @@ export async function handleInboundMessage(
       inboundCtx.MediaContentType = media[0].contentType;
     }
 
-    // Dispatch to the routing + agent system
-    if (core.channel?.routing?.resolveAgentRoute) {
-      const route = await core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "twilio",
-        accountId,
-        peer: { kind: chatType === "group" ? "group" : "user", id: normalizedFrom },
+    // Record session
+    try {
+      const storePath = runtime.channel.session.resolveStorePath(undefined, { agentId: route.agentId });
+      await runtime.channel.session.recordInboundSession({
+        storePath,
+        sessionKey: route.sessionKey,
+        ctx: inboundCtx as any,
+        updateLastRoute: {
+          sessionKey: route.sessionKey,
+          channel: "twilio" as any,
+          to: normalizedTo ?? to,
+          accountId,
+        },
+        onRecordError: (err) => {
+          log?.warn?.(`[twilio:inbound] Session record error: ${err instanceof Error ? err.message : String(err)}`);
+        },
       });
+    } catch (sessionErr) {
+      log?.warn?.(`[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`);
+    }
 
-      if (route?.agentId) {
-        inboundCtx.AgentId = route.agentId;
-        inboundCtx.SessionKey = route.sessionKey ?? sessionKey;
-      }
+    // Dispatch to the agent and deliver reply via Twilio
+    const replyTo = normalizedFrom;
+    const replyAccountId = accountId;
 
-      // Handle pairing mode
-      if (dmPolicy === "pairing" && route?.pairingRequired) {
-        if (core.channel?.pairing?.upsertPairingRequest) {
-          await core.channel.pairing.upsertPairingRequest({
-            channel: "twilio",
-            accountId,
-            peerId: normalizedFrom,
-            peerName: normalizedFrom,
-            chatType,
+    await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: inboundCtx as any,
+      cfg: cfg as any,
+      dispatcherOptions: {
+        deliver: async (payload) => {
+          const text = (payload as any).text as string | undefined;
+          if (!text?.trim()) return;
+          await sendTwilioMessage({
+            cfg,
+            to: replyTo,
+            text,
+            accountId: replyAccountId,
+            mediaUrl: (payload as any).mediaUrl as string | undefined,
           });
-        }
-        log?.info?.(
-          `[twilio:inbound] Pairing request created for ${normalizedFrom}`,
-        );
-        res.status(200).type("text/xml").send("<Response></Response>");
-        return;
-      }
-    }
-
-    // Record the inbound session and dispatch the reply
-    if (core.channel?.inbound?.recordInboundSession) {
-      await core.channel.inbound.recordInboundSession(inboundCtx);
-    }
-
-    if (core.channel?.inbound?.dispatchReplyFromConfig) {
-      await core.channel.inbound.dispatchReplyFromConfig({
-        cfg,
-        channel: "twilio",
-        accountId,
-        inbound: inboundCtx,
-      });
-    }
+        },
+        onError: (err) => {
+          log?.warn?.(`[twilio:inbound] Reply dispatch error: ${err instanceof Error ? err.message : String(err)}`);
+        },
+      },
+    });
   } catch (err: unknown) {
     log?.warn?.(
       `[twilio:inbound] Error processing message: ${err instanceof Error ? err.message : String(err)}`,
