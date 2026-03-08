@@ -20,6 +20,7 @@ import { sendTwilioMessage } from "./send.js";
 import { twilioOutbound } from "./outbound.js";
 import { twilioOnboardingAdapter } from "./onboarding.js";
 import { createTwilioConversationStore } from "./conversation-store.js";
+import { monitorTwilioProvider } from "./monitor.js";
 
 function getTwilioSection(cfg: OpenClawConfig): TwilioConfig | undefined {
   return (cfg as any).channels?.twilio as TwilioConfig | undefined;
@@ -422,7 +423,6 @@ export const twilioPlugin: ChannelPlugin<ResolvedTwilioAccount> = {
         `[${ctx.accountId}] starting Twilio provider (port ${port})`,
       );
 
-      const { monitorTwilioProvider } = await import("./monitor.js");
       return monitorTwilioProvider({
         cfg: ctx.cfg,
         accountId: ctx.accountId,
