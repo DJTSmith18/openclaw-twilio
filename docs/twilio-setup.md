@@ -5,12 +5,14 @@ else automatically on startup.
 
 ---
 
-## Step 1 — Get your Messaging Service SID
+## Step 1 — Create a Messaging Service (if you don't have one)
 
 1. Log in to [console.twilio.com](https://console.twilio.com)
 2. In the left sidebar click **Conversations**
-3. Click **Messaging Service** (or create one if you don't have one yet)
-4. Copy the **SID** — it starts with `MG...`
+3. Click **Messaging Service**
+4. If a service already exists, click it and copy its **SID** (`MG...`) — skip to Step 2
+5. If none exists, click **Create Messaging Service**, give it a name (e.g. `OpenClaw`), click **Create**
+6. Copy the **SID** at the top of the page (`MG...`)
 
 Add it to your `openclaw.json` under the phone number account:
 
@@ -27,17 +29,24 @@ Add it to your `openclaw.json` under the phone number account:
 
 ---
 
-## Step 2 — Clear the old phone number webhook
+## Step 2 — Assign your phone number to the Messaging Service
 
-Your phone number previously had a plain SMS webhook URL on it. Clear it now to
-prevent conflicts with Conversations.
+This links your DID to the Messaging Service so Twilio knows which number to
+use for Conversations. **Do this from the phone number's page, not from the
+Messaging Service page** — the Sender Pool UI often doesn't show existing numbers.
 
 1. In the left sidebar click **Phone Numbers**
 2. Click **Manage** → **Active Numbers**
-3. Click your phone number
+3. Click your phone number (e.g. `+12125551234`)
 4. Scroll to **Messaging Configuration**
-5. Under **"A message comes in"** — delete the webhook URL (clear the field)
-6. Click **Save configuration**
+5. Under **Messaging Service**, click the dropdown and select the service you created
+   (e.g. `OpenClaw`)
+6. Clear the **"A message comes in"** webhook URL field — leave it completely blank
+7. Click **Save configuration**
+
+> Clearing the webhook URL is important. Once the plugin registers your number
+> with Conversations (Step 4), Twilio routes all inbound SMS through Conversations
+> and the old webhook URL is no longer used.
 
 ---
 
@@ -62,8 +71,13 @@ Make sure your `openclaw.json` has `baseUrl` set:
 
 ## Step 4 — Restart OpenClaw
 
-Restart OpenClaw. The plugin will automatically register your phone number with the
-Twilio Conversations API (called "Address Configuration") on startup.
+Restart OpenClaw. On startup the plugin automatically tells Twilio:
+> "When someone texts `+12125551234`, create a Conversation and send the message
+> event to `https://your-domain.example.com/sms2`"
+
+This is called Address Configuration. You do not need to create it manually —
+the plugin creates it via the Twilio API on every startup (idempotent, safe to
+run repeatedly).
 
 Watch the logs for:
 
