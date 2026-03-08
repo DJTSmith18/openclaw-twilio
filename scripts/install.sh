@@ -103,18 +103,18 @@ fi
 
 # Validate credentials
 cyan "Validating Twilio credentials..."
-VALIDATION=$(node -e "
-const twilio = require('twilio');
-const client = twilio('$ACCOUNT_SID', '$AUTH_TOKEN');
-client.api.accounts('$ACCOUNT_SID').fetch()
-  .then(a => console.log('OK:' + a.friendlyName))
-  .catch(e => console.log('ERR:' + e.message));
-" 2>/dev/null || echo "ERR:Could not validate")
+_twilio_response=$(curl -s -w "\n%{http_code}" \
+  -u "$ACCOUNT_SID:$AUTH_TOKEN" \
+  "https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT_SID}.json" 2>/dev/null)
+_twilio_code=$(printf '%s' "$_twilio_response" | tail -1)
+_twilio_body=$(printf '%s' "$_twilio_response" | head -1)
 
-if [[ "$VALIDATION" == OK:* ]]; then
-  green "Credentials valid: ${VALIDATION#OK:}"
+if [[ "$_twilio_code" == "200" ]]; then
+  _friendly=$(printf '%s' "$_twilio_body" | jq -r '.friendly_name // "unknown"' 2>/dev/null || echo "unknown")
+  green "Credentials valid: $_friendly"
 else
-  yellow "Warning: Could not validate credentials (${VALIDATION#ERR:})"
+  _twilio_msg=$(printf '%s' "$_twilio_body" | jq -r '.message // "HTTP $_twilio_code"' 2>/dev/null || echo "HTTP $_twilio_code")
+  yellow "Warning: Could not validate credentials ($_twilio_msg)"
   printf 'Continue anyway? [y/N]: '
   read -r cont
   if [[ "${cont}" != [yY]* ]]; then
