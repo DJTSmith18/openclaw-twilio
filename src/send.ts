@@ -38,7 +38,7 @@ export async function sendConversationsMessage(params: {
     const client = twilio.default(accountSid, authToken);
 
     const createParams: Record<string, unknown> = {
-      author: author ?? "system",
+      author: author ?? account.fromNumber ?? "system",
       body: text ?? "",
     };
 
