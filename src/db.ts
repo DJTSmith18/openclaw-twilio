@@ -95,6 +95,19 @@ CREATE INDEX IF NOT EXISTS idx_twilio_conv_did_phone
   ON twilio_conversations (did, phone_number);
 `;
 
+/**
+ * Temporary table for correlating Event Streams recipient data with inbound
+ * webhook messages. Rows are keyed by MessageSid and cleaned up after dispatch
+ * or after a 60-second TTL.
+ */
+const TWILIO_INBOUND_PENDING_SQL = `
+CREATE TABLE IF NOT EXISTS twilio_inbound_pending (
+  message_sid TEXT PRIMARY KEY,
+  recipients  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+`;
+
 // ── Resolve DB path ─────────────────────────────────────────────────────────
 
 function resolveDbPath(cfg?: TwilioConfig): string {
@@ -147,6 +160,14 @@ export function initDatabase(cfg?: TwilioConfig): Promise<void> {
     await dbRun(TWILIO_CONVERSATIONS_SQL);
     await dbRun(TWILIO_CONVERSATIONS_INDEX_SQL);
 
+    // Event Streams correlation table
+    await dbRun(TWILIO_INBOUND_PENDING_SQL);
+
+    // Clean up stale pending rows (older than 60s) on every startup
+    await dbRun("DELETE FROM twilio_inbound_pending WHERE created_at < ?;", [
+      Date.now() - 60_000,
+    ]);
+
     console.log(`[twilio:db] Database ready: ${dbPath}`);
   })();
 
@@ -184,4 +205,51 @@ export async function pingDatabase(): Promise<boolean> {
  */
 export function getDbPath(cfg?: TwilioConfig): string {
   return resolveDbPath(cfg);
+}
+
+// ── Event Streams pending correlation ───────────────────────────────────────
+
+/**
+ * Store the recipient list from an Event Streams event, keyed by MessageSid.
+ * Used to enrich the regular webhook handler with group participant info.
+ */
+export async function storeEventStreamRecipients(
+  messageSid: string,
+  recipients: string[],
+): Promise<void> {
+  await dbRun(
+    `INSERT OR REPLACE INTO twilio_inbound_pending (message_sid, recipients, created_at)
+     VALUES (?, ?, ?);`,
+    [messageSid, JSON.stringify(recipients), Date.now()],
+  );
+}
+
+/**
+ * Fetch stored recipients for a MessageSid, or null if not yet received.
+ */
+export async function getEventStreamRecipients(
+  messageSid: string,
+): Promise<string[] | null> {
+  const row = await dbGet<{ recipients: string }>(
+    "SELECT recipients FROM twilio_inbound_pending WHERE message_sid = ?;",
+    [messageSid],
+  );
+  if (!row) return null;
+  try {
+    return JSON.parse(row.recipients) as string[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove the pending row after dispatch (cleanup).
+ */
+export async function deleteEventStreamRecipients(
+  messageSid: string,
+): Promise<void> {
+  await dbRun(
+    "DELETE FROM twilio_inbound_pending WHERE message_sid = ?;",
+    [messageSid],
+  );
 }

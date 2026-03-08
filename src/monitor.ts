@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type { TwilioConfig, MonitorTwilioOpts } from "./types.js";
+import type { TwilioConfig, MonitorTwilioOpts, TwilioEventStreamEvent } from "./types.js";
 import { resolveTwilioCredentials } from "./credentials.js";
 import { handleInboundMessage } from "./inbound.js";
 import { handleStatusCallback } from "./status-callback.js";
-import { initDatabase, closeDatabase } from "./db.js";
+import { initDatabase, closeDatabase, storeEventStreamRecipients } from "./db.js";
 
 function getTwilioSection(cfg: unknown): TwilioConfig | undefined {
   return (cfg as any)?.channels?.twilio as TwilioConfig | undefined;
@@ -60,6 +60,7 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   const webhookPort = webhookCfg?.port ?? 3100;
   const webhookPath = webhookCfg?.path ?? "/sms";
   const statusPath = webhookCfg?.statusPath ?? "/sms/status";
+  const streamPath = webhookCfg?.streamPath ?? `${webhookPath}/stream`;
 
   // Dynamic import Express 5
   const express = await import("express");
@@ -67,6 +68,9 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
 
   // Parse URL-encoded bodies (Twilio sends application/x-www-form-urlencoded)
   app.use(express.urlencoded({ extended: false }));
+
+  // Parse JSON bodies for the Event Streams sink endpoint
+  app.use(streamPath, express.json({ type: ["application/json", "application/cloudevents+json"] }));
 
   // Twilio signature validation middleware
   const authToken = credentials.authToken;
@@ -117,6 +121,26 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
 
         next();
       });
+
+      // Validate Event Streams sink endpoint
+      app.use(streamPath, (req: any, res: any, next: any) => {
+        const twilioSignature = req.headers["x-twilio-signature"] as string;
+        const url = `${baseUrl}${streamPath}`;
+
+        if (!twilioSignature) {
+          res.status(403).send("Forbidden");
+          return;
+        }
+
+        const isValid = validateRequest(authToken, twilioSignature, url, req.body ?? {});
+
+        if (!isValid) {
+          res.status(403).send("Forbidden");
+          return;
+        }
+
+        next();
+      });
     } catch {
       console.warn(
         "[twilio:webhook] Could not load twilio module for signature validation",
@@ -140,6 +164,26 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
     handleStatusCallback(req, res);
   });
 
+  // Mount Event Streams sink — stores recipient list for group MMS detection
+  app.post(streamPath, async (req: any, res: any) => {
+    res.status(200).send("OK");
+    try {
+      const event = req.body as TwilioEventStreamEvent;
+      const messageSid = event?.data?.messageSid;
+      const recipients = event?.data?.recipients;
+      if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
+        await storeEventStreamRecipients(messageSid, recipients);
+        log.debug(
+          `[twilio:stream] ${messageSid} → ${recipients.length} recipients`,
+        );
+      }
+    } catch (err: unknown) {
+      log.warn(
+        `[twilio:stream] Error processing event: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  });
+
   // Health check endpoint
   app.get("/health", (_req: any, res: any) => {
     res.json({ status: "ok", channel: "twilio", accountId });
@@ -149,7 +193,7 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const server = app.listen(webhookPort, "0.0.0.0", () => {
       log.info(
-        `[twilio:gateway] Webhook server listening on 0.0.0.0:${webhookPort} (inbound: ${webhookPath}, status: ${statusPath})`,
+        `[twilio:gateway] Webhook server listening on 0.0.0.0:${webhookPort} (inbound: ${webhookPath}, status: ${statusPath}, stream: ${streamPath})`,
       );
     });
 

@@ -4,9 +4,28 @@ import { resolveTwilioAccountByDid } from "./accounts.js";
 import { normalizeE164 } from "./normalize.js";
 import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
 import { getTwilioRuntime } from "./runtime.js";
-import { sendTwilioMessage } from "./send.js";
+import { sendTwilioMessage, sendTwilioGroupMessage } from "./send.js";
+import { getEventStreamRecipients, deleteEventStreamRecipients } from "./db.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
+
+/**
+ * Poll SQLite for Event Streams recipient data for up to `maxMs` milliseconds.
+ * Returns the recipients array once available, or null if not received in time.
+ */
+async function pollForRecipients(
+  messageSid: string,
+  maxMs: number,
+): Promise<string[] | null> {
+  const interval = 50;
+  const attempts = Math.ceil(maxMs / interval);
+  for (let i = 0; i < attempts; i++) {
+    const recipients = await getEventStreamRecipients(messageSid);
+    if (recipients !== null) return recipients;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return null;
+}
 
 type InboundDeps = {
   cfg: OpenClawConfig;
@@ -183,103 +202,137 @@ export async function handleInboundMessage(
   // Extract media attachments
   const media = extractMedia(body);
 
-  // Build inbound context for the runtime
-  const runtime = getTwilioRuntime();
-  const fromAddress =
-    chatType === "group"
-      ? `twilio:group:${normalizedFrom}`
-      : `twilio:${normalizedFrom}`;
+  // Respond immediately with empty TwiML so Twilio doesn't time out
+  res.status(200).type("text/xml").send("<Response></Response>");
 
-  try {
-    // Resolve agent route
-    const route = runtime.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "twilio",
-      accountId,
-      peer: { kind: chatType === "group" ? "group" : "user", id: normalizedFrom },
-    });
-
-    // Build the inbound context
-    const inboundCtx: Record<string, unknown> = {
-      Body: messageText,
-      RawBody: messageText,
-      CommandBody: messageText,
-      From: fromAddress,
-      To: normalizedTo ?? to,
-      SessionKey: route.sessionKey,
-      AccountId: accountId,
-      AgentId: route.agentId,
-      ChatType: chatType,
-      SenderName: (contactInfo as any)?.name ?? normalizedFrom,
-      SenderId: normalizedFrom,
-      ContactInfo: contactInfo ?? null,
-      Provider: "twilio",
-      Surface: media.length > 0 ? "mms" : "sms",
-      MessageSid: messageSid,
-      Timestamp: Date.now(),
-      OriginatingChannel: "twilio",
-      OriginatingTo: normalizedTo ?? to,
-      OriginatingAccountId: accountId,
-    };
-
-    // Add media payload
-    if (media.length > 0) {
-      inboundCtx.Media = media;
-      inboundCtx.MediaUrl = media[0].url;
-      inboundCtx.MediaContentType = media[0].contentType;
-    }
-
-    // Record session
+  // Process asynchronously — wait up to 500ms for Event Streams recipients
+  void (async () => {
     try {
-      const storePath = runtime.channel.session.resolveStorePath(undefined, { agentId: route.agentId });
-      await runtime.channel.session.recordInboundSession({
-        storePath,
-        sessionKey: route.sessionKey,
-        ctx: inboundCtx as any,
-        updateLastRoute: {
+      const ourNumber = normalizedTo ?? to;
+
+      // Poll for Event Streams data (group participant list)
+      const streamRecipients = await pollForRecipients(messageSid, 500);
+      await deleteEventStreamRecipients(messageSid).catch(() => {});
+
+      // Determine group vs direct from recipients
+      const otherParticipants: string[] = streamRecipients
+        ? streamRecipients
+            .map((r) => normalizeE164(r) ?? r)
+            .filter((r) => r !== normalizeE164(ourNumber) && r !== normalizeE164(normalizedFrom))
+        : [];
+
+      const isGroup = otherParticipants.length > 0;
+      const resolvedChatType: "direct" | "group" = isGroup ? "group" : "direct";
+      const groupId = isGroup ? [...otherParticipants].sort().join(":") : undefined;
+      const peerId = groupId ?? normalizedFrom;
+
+      log?.info?.(
+        `[twilio:inbound] dispatch ${resolvedChatType}${isGroup ? ` group=${groupId}` : ""} from ${normalizedFrom} → ${accountId}`,
+      );
+
+      const runtime = getTwilioRuntime();
+      const fromAddress =
+        resolvedChatType === "group"
+          ? `twilio:group:${peerId}`
+          : `twilio:${normalizedFrom}`;
+
+      // Resolve agent route
+      const route = runtime.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "twilio",
+        accountId,
+        peer: { kind: resolvedChatType === "group" ? "group" : "user", id: peerId },
+      });
+
+      // Build the inbound context
+      const inboundCtx: Record<string, unknown> = {
+        Body: messageText,
+        RawBody: messageText,
+        CommandBody: messageText,
+        From: fromAddress,
+        To: normalizedTo ?? to,
+        SessionKey: route.sessionKey,
+        AccountId: accountId,
+        AgentId: route.agentId,
+        ChatType: resolvedChatType,
+        SenderName: (contactInfo as any)?.name ?? normalizedFrom,
+        SenderId: normalizedFrom,
+        ContactInfo: contactInfo ?? null,
+        Provider: "twilio",
+        Surface: media.length > 0 ? "mms" : "sms",
+        MessageSid: messageSid,
+        Timestamp: Date.now(),
+        OriginatingChannel: "twilio",
+        OriginatingTo: normalizedTo ?? to,
+        OriginatingAccountId: accountId,
+        ...(isGroup && {
+          GroupId: groupId,
+          GroupParticipants: [normalizedFrom, ...otherParticipants],
+        }),
+      };
+
+      if (media.length > 0) {
+        inboundCtx.Media = media;
+        inboundCtx.MediaUrl = media[0].url;
+        inboundCtx.MediaContentType = media[0].contentType;
+      }
+
+      // Record session
+      try {
+        const storePath = runtime.channel.session.resolveStorePath(undefined, { agentId: route.agentId });
+        await runtime.channel.session.recordInboundSession({
+          storePath,
           sessionKey: route.sessionKey,
-          channel: "twilio" as any,
-          to: normalizedTo ?? to,
-          accountId,
-        },
-        onRecordError: (err) => {
-          log?.warn?.(`[twilio:inbound] Session record error: ${err instanceof Error ? err.message : String(err)}`);
+          ctx: inboundCtx as any,
+          updateLastRoute: {
+            sessionKey: route.sessionKey,
+            channel: "twilio" as any,
+            to: normalizedTo ?? to,
+            accountId,
+          },
+          onRecordError: (err) => {
+            log?.warn?.(`[twilio:inbound] Session record error: ${err instanceof Error ? err.message : String(err)}`);
+          },
+        });
+      } catch (sessionErr) {
+        log?.warn?.(`[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`);
+      }
+
+      // All group members to reply to (sender + other participants)
+      const replyRecipients = isGroup
+        ? [normalizedFrom, ...otherParticipants]
+        : [normalizedFrom];
+
+      await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: inboundCtx as any,
+        cfg: cfg as any,
+        dispatcherOptions: {
+          deliver: async (payload) => {
+            const text = (payload as any).text as string | undefined;
+            if (!text?.trim()) return;
+            const mediaUrl = (payload as any).mediaUrl as string | undefined;
+            if (isGroup) {
+              await sendTwilioGroupMessage({
+                cfg,
+                to: replyRecipients[0],
+                recipients: replyRecipients,
+                text,
+                accountId,
+                mediaUrl,
+              });
+            } else {
+              await sendTwilioMessage({ cfg, to: normalizedFrom, text, accountId, mediaUrl });
+            }
+          },
+          onError: (err) => {
+            log?.warn?.(`[twilio:inbound] Reply dispatch error: ${err instanceof Error ? err.message : String(err)}`);
+          },
         },
       });
-    } catch (sessionErr) {
-      log?.warn?.(`[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`);
+    } catch (err: unknown) {
+      log?.warn?.(
+        `[twilio:inbound] Error processing message: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-
-    // Dispatch to the agent and deliver reply via Twilio
-    const replyTo = normalizedFrom;
-    const replyAccountId = accountId;
-
-    await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: inboundCtx as any,
-      cfg: cfg as any,
-      dispatcherOptions: {
-        deliver: async (payload) => {
-          const text = (payload as any).text as string | undefined;
-          if (!text?.trim()) return;
-          await sendTwilioMessage({
-            cfg,
-            to: replyTo,
-            text,
-            accountId: replyAccountId,
-            mediaUrl: (payload as any).mediaUrl as string | undefined,
-          });
-        },
-        onError: (err) => {
-          log?.warn?.(`[twilio:inbound] Reply dispatch error: ${err instanceof Error ? err.message : String(err)}`);
-        },
-      },
-    });
-  } catch (err: unknown) {
-    log?.warn?.(
-      `[twilio:inbound] Error processing message: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  // Always respond with empty TwiML
-  res.status(200).type("text/xml").send("<Response></Response>");
+  })();
 }

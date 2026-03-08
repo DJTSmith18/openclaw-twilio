@@ -38,6 +38,7 @@ export type TwilioSharedConfig = {
     port?: number;
     path?: string;
     statusPath?: string;
+    streamPath?: string;
     baseUrl?: string;
   };
 };
@@ -113,6 +114,28 @@ export type SendTwilioMessageResult = {
   messageId?: string;
   conversationId?: string;
   error?: string;
+};
+
+/**
+ * Twilio Event Streams inbound message event (CloudEvents schema v5).
+ * Fired alongside the regular webhook for every inbound message.
+ * The `data.recipients` array contains all group MMS participants.
+ */
+export type TwilioEventStreamEvent = {
+  specversion: string;
+  type: string;
+  source: string;
+  id: string;
+  dataschema?: string;
+  data: {
+    messageSid: string;
+    accountSid?: string;
+    from: string;
+    to: string;
+    body?: string;
+    numMedia?: number;
+    recipients?: string[];
+  };
 };
 
 export type MonitorTwilioOpts = {
