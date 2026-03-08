@@ -71,8 +71,19 @@ bold "Step 1: Prerequisites"
 check_prereqs
 echo
 
-# Step 2: Twilio Credentials
-bold "Step 2: Twilio Credentials"
+# Step 2: Install dependencies
+bold "Step 2: Installing dependencies"
+cd "$PLUGIN_DIR"
+if [[ -f "package.json" ]]; then
+  npm install --omit=dev 2>&1 | tail -5 || true
+  green "Dependencies installed"
+else
+  yellow "No package.json found — skipping npm install"
+fi
+echo
+
+# Step 3: Twilio Credentials
+bold "Step 3: Twilio Credentials"
 
 ACCOUNT_SID=""
 AUTH_TOKEN=""
@@ -123,8 +134,8 @@ else
 fi
 echo
 
-# Step 3: DID Setup (Phone Numbers)
-bold "Step 3: Phone Number (DID) Setup"
+# Step 4: DID Setup (Phone Numbers)
+bold "Step 4: Phone Number (DID) Setup"
 
 declare -A DID_NAMES
 declare -A DID_MSGSVC
@@ -157,8 +168,8 @@ if [[ ${#DIDS[@]} -eq 0 ]]; then
 fi
 echo
 
-# Step 4: Webhook Configuration
-bold "Step 4: Webhook Configuration"
+# Step 5: Webhook Configuration
+bold "Step 5: Webhook Configuration"
 
 prompt WEBHOOK_PORT "Webhook port" "3100"
 prompt WEBHOOK_PATH "Webhook path" "/sms"
@@ -166,8 +177,8 @@ prompt STATUS_PATH "Status callback path" "/sms/status"
 prompt WEBHOOK_BASE_URL "Public base URL (for callbacks, leave blank if none)" ""
 echo
 
-# Step 5: Access Policies
-bold "Step 5: Access Policies"
+# Step 6: Access Policies
+bold "Step 6: Access Policies"
 
 prompt DM_POLICY "Default DM policy (open/pairing/disabled)" "pairing"
 
@@ -183,8 +194,8 @@ fi
 prompt GROUP_POLICY "Default group policy (open/allowlist/disabled)" "allowlist"
 echo
 
-# Step 6: Agent Bindings
-bold "Step 6: Agent Bindings"
+# Step 7: Agent Bindings
+bold "Step 7: Agent Bindings"
 
 AGENTS=$(jq -r '.agents[]?.id // empty' "$CONFIG_FILE" 2>/dev/null || true)
 if [[ -n "$AGENTS" ]]; then
@@ -202,9 +213,9 @@ done
 echo
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Step 7: Database Setup (shared SQLite — contacts + conversation history)
+# Step 8: Database Setup (shared SQLite — contacts + conversation history)
 # ──────────────────────────────────────────────────────────────────────────────
-bold "Step 7: Database Setup"
+bold "Step 8: Database Setup"
 
 DB_PATH=""
 DB_SOURCE=""
@@ -213,7 +224,7 @@ CONTACTS_PHONE_COL="phone"
 CONTACTS_EXTRA_COLS="name"
 VOIPMS_DETECTED=false
 
-# ── 7a. Detect voipms-sms plugin ─────────────────────────────────────────────
+# ── 8a. Detect voipms-sms plugin ─────────────────────────────────────────────
 VOIPMS_DB=$(jq -r '.plugins.entries["voipms-sms"].config.dbPath // empty' "$CONFIG_FILE" 2>/dev/null || true)
 
 if [[ -n "$VOIPMS_DB" && -f "$VOIPMS_DB" ]]; then
@@ -266,7 +277,7 @@ if [[ -n "$VOIPMS_DB" && -f "$VOIPMS_DB" ]]; then
   fi
 fi
 
-# ── 7b. If no shared DB, set up a new one ────────────────────────────────────
+# ── 8b. If no shared DB, set up a new one ────────────────────────────────────
 if [[ -z "$DB_PATH" ]]; then
   cyan "No existing shared database found. Setting up a new one."
 
@@ -310,7 +321,7 @@ if [[ -z "$DB_PATH" ]]; then
   sqlite3 "$DB_PATH" "PRAGMA journal_mode=WAL; SELECT 1;" >/dev/null
   green "Database initialized: $DB_PATH"
 
-  # ── 7c. Create voipms-compatible contacts table ───────────────────────────
+  # ── 8c. Create voipms-compatible contacts table ───────────────────────────
   echo
   cyan "--- Contacts Table Setup ---"
   echo "Creating a contacts table compatible with the voipms-sms plugin."
@@ -362,7 +373,7 @@ if [[ -z "$DB_PATH" ]]; then
   fi
 fi
 
-# ── 7d. Create twilio_conversations table (always) ──────────────────────────
+# ── 8d. Create twilio_conversations table (always) ──────────────────────────
 echo
 cyan "Creating twilio_conversations table..."
 sqlite3 "$DB_PATH" "
@@ -386,7 +397,7 @@ CREATE INDEX IF NOT EXISTS idx_twilio_conv_did_phone
 "
 green "Conversation history table ready"
 
-# ── 7e. Also ensure sms_threads exists (voipms compat) ─────────────────────
+# ── 8e. Also ensure sms_threads exists (voipms compat) ─────────────────────
 sqlite3 "$DB_PATH" "
 CREATE TABLE IF NOT EXISTS sms_threads (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -400,7 +411,7 @@ CREATE TABLE IF NOT EXISTS sms_threads (
 );
 " 2>/dev/null || true
 
-# ── 7f. Ensure sms_language_preferences exists (voipms compat) ─────────────
+# ── 8f. Ensure sms_language_preferences exists (voipms compat) ─────────────
 sqlite3 "$DB_PATH" "
 CREATE TABLE IF NOT EXISTS sms_language_preferences (
   phone_number       TEXT PRIMARY KEY,
@@ -444,17 +455,6 @@ else
       selectColumns: $selectCols
     }')
 fi
-
-# Step 8: npm install
-bold "Step 8: Installing dependencies"
-cd "$PLUGIN_DIR"
-if [[ -f "package.json" ]]; then
-  npm install --omit=dev 2>&1 | tail -5 || true
-  green "Dependencies installed"
-else
-  yellow "No package.json found — skipping npm install"
-fi
-echo
 
 # Step 9: Register in openclaw.json
 bold "Step 9: Registering plugin in openclaw.json"
