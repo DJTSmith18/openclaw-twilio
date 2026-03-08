@@ -134,7 +134,7 @@ fi
 if [[ -d "$PLUGIN_DIR/.git" ]]; then
   cyan "Pulling latest code (branch: $BRANCH)..."
   git -C "$PLUGIN_DIR" fetch origin
-  git -C "$PLUGIN_DIR" checkout "$BRANCH"
+  git -C "$PLUGIN_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
   git -C "$PLUGIN_DIR" pull --ff-only origin "$BRANCH"
   green "Repository updated at $PLUGIN_DIR"
 else
