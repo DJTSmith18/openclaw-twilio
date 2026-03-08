@@ -63,6 +63,21 @@ Add it to your `openclaw.json` under the phone number:
 }
 ```
 
+### What to do with all the other Messaging Service settings
+
+The Messaging Service has many tabs and options. Here is what matters vs. what
+to ignore for this setup:
+
+| Setting | What to do |
+|---|---|
+| **Properties → SID** | Copy this — it's the `MG...` you need |
+| **Sender Pool** | Skip — you will assign the number from the phone number page (Step 3) |
+| **Integration → "Autocreate a Conversation"** | **Ignore / leave it.** This toggle is greyed out for many accounts and it does not matter. The plugin handles conversation auto-creation via Address Configuration — a separate Twilio mechanism that does the same thing and takes priority. You do not need to enable this toggle. |
+| **Integration → Webhook / Studio Flow** | Skip — the plugin registers its own webhook via Address Configuration |
+| **Features (Sticky Sender, Smart Encoding, etc.)** | Leave defaults — none of these affect the plugin |
+
+**Bottom line: the only thing you need from the Messaging Service page is the `MG...` SID.**
+
 ---
 
 ## Step 3 — Assign your phone number to the Messaging Service
@@ -152,3 +167,4 @@ Send an SMS to your Twilio number from any phone. Look for in the logs:
 | Address Configuration registered but no inbound | Check reverse proxy forwards POST to `localhost:3100/sms2` |
 | 403 Forbidden on webhook | `baseUrl` doesn't match what Twilio sends to — no trailing slash, correct scheme |
 | Still hitting old webhook | Old "A message comes in" URL not cleared (Step 3) |
+| "Autocreate a Conversation" greyed out in Messaging Service | Normal — ignore it. The plugin uses Address Configuration instead, which does not require this toggle |
