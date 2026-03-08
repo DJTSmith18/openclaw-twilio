@@ -15,7 +15,8 @@
 # prompts work. Piping through bash consumes stdin and breaks all read commands.
 set -euo pipefail
 
-REPO_URL="https://github.com/DJTSmith18/openclaw-twilio.git"
+REPO_OWNER="DJTSmith18"
+REPO_NAME="openclaw-twilio"
 BRANCH="main"
 CUSTOM_DIR=""        # set by --dir; empty means "derive from openclaw base"
 FORCE_UPGRADE=false  # skip prompts, just pull + npm install
@@ -101,14 +102,6 @@ echo
 export CONFIG_FILE="$OPENCLAW_BASE/openclaw.json"
 PLUGIN_DIR="${CUSTOM_DIR:-$OPENCLAW_BASE/extensions/twilio}"
 
-# ── Prereq: git ───────────────────────────────────────────────────────────────
-if ! command -v git &>/dev/null; then
-  red "git is required but not found."
-  red "Install it first:  sudo apt install git   (or brew install git on macOS)"
-  exit 1
-fi
-green "git found: $(git --version)"
-
 # ── Detect whether this is an existing install ────────────────────────────────
 already_configured() {
   command -v jq &>/dev/null \
@@ -117,7 +110,7 @@ already_configured() {
 }
 
 IS_UPGRADE=false
-if [[ -d "$PLUGIN_DIR/.git" ]] && already_configured; then
+if [[ -f "$PLUGIN_DIR/package.json" ]] && already_configured; then
   IS_UPGRADE=true
 fi
 
@@ -130,27 +123,12 @@ if [[ "$FORCE_UPGRADE" == true ]]; then
   IS_UPGRADE=true
 fi
 
-# ── Clone or pull ─────────────────────────────────────────────────────────────
-if [[ -d "$PLUGIN_DIR/.git" ]]; then
-  CURRENT_BRANCH=$(git -C "$PLUGIN_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
-    cyan "Switching branch $CURRENT_BRANCH → $BRANCH (re-cloning plugin directory)..."
-    rm -rf "$PLUGIN_DIR"
-    mkdir -p "$(dirname "$PLUGIN_DIR")"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$PLUGIN_DIR"
-    green "Repository cloned to $PLUGIN_DIR (branch: $BRANCH)"
-  else
-    cyan "Pulling latest code (branch: $BRANCH)..."
-    git -C "$PLUGIN_DIR" fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
-    git -C "$PLUGIN_DIR" reset --hard "origin/$BRANCH"
-    green "Repository updated at $PLUGIN_DIR"
-  fi
-else
-  cyan "Cloning $REPO_URL (branch: $BRANCH) → $PLUGIN_DIR"
-  mkdir -p "$(dirname "$PLUGIN_DIR")"
-  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$PLUGIN_DIR"
-  green "Repository cloned to $PLUGIN_DIR"
-fi
+# ── Download plugin (curl tarball — no git required) ─────────────────────────
+TARBALL_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.tar.gz"
+cyan "Downloading plugin (branch: $BRANCH)..."
+mkdir -p "$PLUGIN_DIR"
+curl -fsSL "$TARBALL_URL" | tar -xz --strip-components=1 -C "$PLUGIN_DIR"
+green "Plugin files extracted to $PLUGIN_DIR"
 
 echo
 
