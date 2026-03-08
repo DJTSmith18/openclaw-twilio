@@ -240,7 +240,7 @@ export async function handleInboundMessage(
       if (isGroup) {
         const resolved = await resolveOrCreateGroup(accountId, groupMembers);
         groupId = resolved.groupId;
-        log?.debug?.(
+        log?.info?.(
           `[twilio:inbound] group ${resolved.isNew ? "created" : "matched"}: ${groupId} members=[${groupMembers.join(",")}]`,
         );
       }
@@ -324,6 +324,9 @@ export async function handleInboundMessage(
 
       // Reply to all group members (groupMembers already includes sender, excludes our number)
       const replyRecipients = isGroup ? groupMembers : [normalizedFrom];
+      log?.info?.(
+        `[twilio:inbound] replyRecipients=${JSON.stringify(replyRecipients)} isGroup=${isGroup}`,
+      );
 
       await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: inboundCtx as any,
@@ -333,6 +336,9 @@ export async function handleInboundMessage(
             const text = (payload as any).text as string | undefined;
             if (!text?.trim()) return;
             const mediaUrl = (payload as any).mediaUrl as string | undefined;
+            log?.info?.(
+              `[twilio:inbound] deliver isGroup=${isGroup} replyRecipients=${JSON.stringify(replyRecipients)}`,
+            );
             if (isGroup) {
               await sendTwilioGroupMessage({
                 cfg,
