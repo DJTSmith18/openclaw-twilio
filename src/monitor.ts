@@ -90,6 +90,10 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
       const validateRequestWithBody = twilio.default.validateRequestWithBody;
 
       app.use(webhookPath, (req: any, res: any, next: any) => {
+        // app.use(path) matches sub-paths too — skip validation for sub-paths
+        // (e.g. /sms2/stream) which have their own middleware below.
+        if (req.path !== "/") return next();
+
         const twilioSignature = req.headers["x-twilio-signature"] as string;
         const url = `${baseUrl}${webhookPath}`;
 
@@ -112,6 +116,8 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
 
       // Also validate status callback path
       app.use(statusPath, (req: any, res: any, next: any) => {
+        if (req.path !== "/") return next();
+
         const twilioSignature = req.headers["x-twilio-signature"] as string;
         const url = `${baseUrl}${statusPath}`;
 
