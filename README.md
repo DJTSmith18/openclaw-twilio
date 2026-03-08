@@ -30,8 +30,10 @@ SMS, MMS, RCS, and Group messaging channel for [OpenClaw](https://github.com/ope
 One command on the destination machine. No manual cloning or tarball extraction required.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh)
 ```
+
+> **Note:** Use `bash <(curl ...)` — not `curl ... | bash`. Process substitution keeps stdin connected to your terminal so the interactive prompts work correctly.
 
 The script will:
 1. Detect your OpenClaw installation (prompts for the base directory if not found at `~/.openclaw`)
@@ -41,7 +43,7 @@ The script will:
 **Upgrade an existing install** (pulls latest code + updates deps, preserves all config):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --upgrade
+bash <(curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh) --upgrade
 ```
 
 The script also auto-detects an existing install — if `channels.twilio` is already present in `openclaw.json` it will upgrade automatically without prompting.
@@ -49,19 +51,19 @@ The script also auto-detects an existing install — if `channels.twilio` is alr
 **Force full reconfiguration** on an existing install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --reconfigure
+bash <(curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh) --reconfigure
 ```
 
 **Pin to a specific branch or tag:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --branch v1.0.1
+bash <(curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh) --branch v1.0.1
 ```
 
 **Install to a custom directory:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --dir /opt/openclaw/extensions/twilio
+bash <(curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh) --dir /opt/openclaw/extensions/twilio
 ```
 
 After installation, restart OpenClaw:
