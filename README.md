@@ -392,4 +392,5 @@ capabilities: {
 
 ## License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for non-commercial use.
+Commercial use requires a separate license from the author.
