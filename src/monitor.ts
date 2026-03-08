@@ -198,6 +198,8 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
               try { return JSON.parse(req.rawBody ?? "{}"); } catch { return {}; }
             })();
       log.info(`[twilio:stream] rawBody=${req.rawBody?.length ?? 0}b bodyParsed=${Object.keys(req.body ?? {}).length > 0} contentType="${req.headers["content-type"] ?? "none"}"`);
+      log.info(`[twilio:stream] body keys: ${Object.keys(parsedBody).join(", ")}`);
+      log.info(`[twilio:stream] body dump: ${JSON.stringify(parsedBody).slice(0, 500)}`);
       const event = parsedBody as TwilioEventStreamEvent;
       const messageSid = event?.messageSid;
       const recipients = event?.recipients;
