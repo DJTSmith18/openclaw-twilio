@@ -11,6 +11,18 @@
 #   curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --reconfigure
 set -euo pipefail
 
+# When run via "curl | bash", stdin is the pipe rather than the terminal.
+# Re-attach stdin to /dev/tty so interactive prompts (read) work correctly.
+if [[ -t 0 ]]; then
+  : # already a terminal, nothing to do
+elif [[ -e /dev/tty ]]; then
+  exec < /dev/tty
+else
+  echo "ERROR: No terminal available. Save the script and run it directly:" >&2
+  echo "  bash remote-install.sh" >&2
+  exit 1
+fi
+
 REPO_URL="https://github.com/DJTSmith18/openclaw-twilio.git"
 BRANCH="main"
 CUSTOM_DIR=""        # set by --dir; empty means "derive from openclaw base"
