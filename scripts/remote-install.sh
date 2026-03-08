@@ -207,44 +207,16 @@ if [[ "$IS_UPGRADE" == true ]]; then
       cyan "Config structure is up to date."
     fi
 
-    # ── Conversations API migration ────────────────────────────────────────
-    # Detect whether this install is still configured for the old Messages API
-    # (no conversationServiceSid set). Prompt user to supply the IS... SID so
-    # the plugin can register Address Configuration on startup.
-    _has_conv_sid=$(jq -r '.channels.twilio.shared.conversationServiceSid // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
-    if [[ -z "$_has_conv_sid" ]]; then
+    # ── Conversations API migration notice ────────────────────────────────
+    _has_base_url=$(jq -r '.channels.twilio.shared.webhook.baseUrl // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    if [[ -z "$_has_base_url" ]]; then
       echo
-      yellow "┌─────────────────────────────────────────────────────────────┐"
-      yellow "│  Conversations API migration                                │"
-      yellow "│                                                             │"
-      yellow "│  This version uses the Twilio Conversations API.           │"
-      yellow "│  A Conversations Service SID (IS...) is required.          │"
-      yellow "│                                                             │"
-      yellow "│  Find it in: Twilio Console → Conversations →              │"
-      yellow "│              Manage → Services → your service → SID        │"
-      yellow "│                                                             │"
-      yellow "│  See docs/twilio-setup.md for full setup instructions.     │"
-      yellow "└─────────────────────────────────────────────────────────────┘"
-      echo
-      printf 'Conversations Service SID (IS..., or Enter to skip for now): '
-      read -r _conv_sid
-      _conv_sid="${_conv_sid// /}"
-      if [[ -n "$_conv_sid" ]]; then
-        if [[ "$_conv_sid" != IS* ]]; then
-          yellow "Warning: SID does not start with IS — saved anyway, verify in Twilio Console."
-        fi
-        _backup="${CONFIG_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
-        cp "$CONFIG_FILE" "$_backup"
-        _tmp=$(mktemp)
-        jq --arg sid "$_conv_sid" \
-          '.channels.twilio.shared.conversationServiceSid = $sid' \
-          "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
-        green "conversationServiceSid saved: $_conv_sid"
-      else
-        yellow "Skipped — you can add it later via: bash scripts/manage.sh (option 12)"
-      fi
+      yellow "NOTE: 'baseUrl' is not set in your config."
+      yellow "The plugin needs it to register your phone number with Twilio Conversations."
+      yellow "Add it under channels.twilio.shared.webhook.baseUrl then restart OpenClaw."
+      yellow "See docs/twilio-setup.md for details."
     else
-      green "Conversations Service SID already set: ${_has_conv_sid}"
+      green "Conversations API: baseUrl configured → $_has_base_url"
     fi
   fi
 
@@ -257,11 +229,11 @@ if [[ "$IS_UPGRADE" == true ]]; then
   if command -v jq &>/dev/null; then
     jq -r '
       .channels.twilio.shared |
-      "  Account SID:         " + (.accountSid[0:8] // "?") + "...",
-      "  Webhook port:        " + (.webhook.port // "?" | tostring),
-      "  Webhook path:        " + (.webhook.path // "?"),
-      "  Conversation Svc SID:" + " " + (.conversationServiceSid // "(not set — see docs/twilio-setup.md)"),
-      "  DB path:             " + (.dbPath // "?")
+      "  Account SID:  " + (.accountSid[0:8] // "?") + "...",
+      "  Webhook port: " + (.webhook.port // "?" | tostring),
+      "  Webhook path: " + (.webhook.path // "?"),
+      "  Base URL:     " + (.webhook.baseUrl // "(not set — required for Conversations)"),
+      "  DB path:      " + (.dbPath // "?")
     ' "$CONFIG_FILE" 2>/dev/null || true
     echo
     jq -r '
