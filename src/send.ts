@@ -47,7 +47,7 @@ export async function sendConversationsMessage(params: {
     }
 
     console.log(
-      `[twilio:send] conversations message to=${conversationSid} body="${(text ?? "").slice(0, 60)}"`,
+      `[twilio:send] conversations message to=${conversationSid} payload=${JSON.stringify(createParams)}`,
     );
 
     const section = getTwilioSection(cfg);
