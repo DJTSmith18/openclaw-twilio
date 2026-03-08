@@ -504,11 +504,12 @@ WEBHOOK_JSON=$(jq -n \
   --arg baseUrl "$WEBHOOK_BASE_URL" \
   '{port: $port, path: $path, statusPath: $statusPath} + (if $baseUrl != "" then {baseUrl: $baseUrl} else {} end)')
 
-# Build channel config (now includes dbPath + contactLookup)
+# Build channel config.
+# Always use the accounts block even for a single DID — this keeps the
+# config structure consistent and makes adding DIDs later trivial.
+# Only fall back to top-level single-account format when no DIDs were
+# entered (env-var fallback mode, number unknown at install time).
 if [[ ${#DIDS[@]} -gt 0 ]]; then
-  # Multi-DID: do NOT write dmPolicy/allowFrom/groupPolicy at top level.
-  # They live inside each account — top-level policy fields trigger
-  # "openclaw doctor" to misidentify this as a single-account setup.
   CHANNEL_CONFIG=$(jq -n \
     --arg sid "$ACCOUNT_SID" \
     --arg token "$AUTH_TOKEN" \
@@ -526,6 +527,7 @@ if [[ ${#DIDS[@]} -gt 0 ]]; then
       accounts: $accounts
     }')
 else
+  # No DIDs entered — phone number comes from TWILIO_FROM_NUMBER at runtime.
   CHANNEL_CONFIG=$(jq -n \
     --arg sid "$ACCOUNT_SID" \
     --arg token "$AUTH_TOKEN" \
