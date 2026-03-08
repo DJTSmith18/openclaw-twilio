@@ -304,6 +304,28 @@ export async function handleInboundMessage(
 
       const lines = [header, ...senderLines];
 
+      // ── Participants list for group conversations ────────────────────
+      if (chatType === "group" && groupParticipants && groupParticipants.length > 0) {
+        const contactLookupCfg = section?.shared?.contactLookup ?? section?.contactLookup;
+        const participantLabels = await Promise.all(
+          groupParticipants.map(async (p) => {
+            try {
+              const info = await lookupContact(p, {
+                table: contactLookupCfg?.table,
+                phoneColumn: contactLookupCfg?.phoneColumn,
+                phoneMatch: contactLookupCfg?.phoneMatch,
+                selectColumns: contactLookupCfg?.selectColumns,
+              });
+              const name = (info as any)?.name;
+              return name ? String(name) : p;
+            } catch {
+              return p;
+            }
+          }),
+        );
+        lines.push(`Participants: ${participantLabels.join(", ")}`);
+      }
+
       if (chatType === "group" && newParticipants.length > 0) {
         lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
