@@ -9,15 +9,38 @@ function getTwilioSection(cfg: unknown): TwilioConfig | undefined {
   return (cfg as any)?.channels?.twilio as TwilioConfig | undefined;
 }
 
+// ── Singleton server state ───────────────────────────────────────────────────
+// OpenClaw calls startAccount once per DID, but we only want one Express
+// server for all DIDs. The first account starts the server; subsequent
+// accounts wait on the same promise so they stay alive until it stops.
+
+let _serverPromise: Promise<void> | null = null;
+
 /**
  * Start the Twilio webhook server.
  *
  * A single Express server handles all DIDs. Inbound routing uses the
  * `To` field to resolve the correct account.
+ *
+ * When called for subsequent accounts, returns the already-running server
+ * promise rather than starting a second server on the same port.
  */
 export async function monitorTwilioProvider(
   opts: MonitorTwilioOpts,
 ): Promise<void> {
+  if (_serverPromise) {
+    console.log(`[twilio:gateway] Server already running — ${opts.accountId} sharing existing instance`);
+    return _serverPromise;
+  }
+
+  _serverPromise = _startServer(opts).finally(() => {
+    _serverPromise = null;
+  });
+
+  return _serverPromise;
+}
+
+async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   const { cfg, accountId, abortSignal } = opts;
   const ocCfg = cfg as OpenClawConfig;
   const section = getTwilioSection(cfg);
