@@ -506,13 +506,13 @@ WEBHOOK_JSON=$(jq -n \
 
 # Build channel config (now includes dbPath + contactLookup)
 if [[ ${#DIDS[@]} -gt 0 ]]; then
+  # Multi-DID: do NOT write dmPolicy/allowFrom/groupPolicy at top level.
+  # They live inside each account — top-level policy fields trigger
+  # "openclaw doctor" to misidentify this as a single-account setup.
   CHANNEL_CONFIG=$(jq -n \
     --arg sid "$ACCOUNT_SID" \
     --arg token "$AUTH_TOKEN" \
     --arg dbPath "$DB_PATH" \
-    --arg policy "$DM_POLICY" \
-    --argjson allowFrom "$ALLOW_FROM" \
-    --arg groupPolicy "$GROUP_POLICY" \
     --argjson webhook "$WEBHOOK_JSON" \
     --argjson accounts "$ACCOUNTS_JSON" \
     --argjson contactLookup "$CONTACT_LOOKUP_JSON" \
@@ -522,9 +522,6 @@ if [[ ${#DIDS[@]} -gt 0 ]]; then
       authToken: $token,
       dbPath: $dbPath,
       contactLookup: $contactLookup,
-      dmPolicy: $policy,
-      allowFrom: $allowFrom,
-      groupPolicy: $groupPolicy,
       webhook: $webhook,
       accounts: $accounts
     }')
