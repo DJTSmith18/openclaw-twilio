@@ -207,18 +207,14 @@ export async function handleInboundMessage(
               }
             }
 
-            // Ensure our DID is an identity participant so we can use it as
-            // author when sending replies (required for group MMS conversations).
-            if (ourDid) {
-              const alreadyJoined = participants.some((p: any) => p.identity === ourDid);
-              if (!alreadyJoined) {
-                await client.conversations.v1
-                  .conversations(conversationSid)
-                  .participants.create({ identity: ourDid } as any)
-                  .catch((e: unknown) =>
-                    log?.debug?.(`[twilio:inbound] Could not add self as participant: ${e instanceof Error ? e.message : String(e)}`),
-                  );
-              }
+            // For group conversations, ensure our DID is an identity participant
+            // on every message so it can be used as author when sending replies.
+            // Always attempt; Twilio returns 409 if already present (ignored).
+            if (chatType === "group" && ourDid) {
+              await client.conversations.v1
+                .conversations(conversationSid)
+                .participants.create({ identity: ourDid } as any)
+                .catch(() => {/* already a participant or non-fatal */});
             }
 
             // Update DB cache
