@@ -54,10 +54,6 @@ export function isSafeSqlIdent(name: string): boolean {
 
 /**
  * Contacts table — voipms-compatible schema.
- *
- * The voipms-sms plugin creates a contacts table with a configurable
- * phone column as PRIMARY KEY and TEXT columns.  We use the same schema
- * so either plugin can read/write the shared table.
  */
 const CONTACTS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS contacts (
@@ -69,7 +65,6 @@ CREATE TABLE IF NOT EXISTS contacts (
 
 /**
  * Twilio conversation history table.
- *
  * Stores every inbound and outbound message for audit / thread context.
  */
 const TWILIO_CONVERSATIONS_SQL = `
@@ -96,52 +91,40 @@ CREATE INDEX IF NOT EXISTS idx_twilio_conv_did_phone
 `;
 
 /**
- * Temporary table for correlating Event Streams recipient data with inbound
- * webhook messages. Rows are keyed by MessageSid and cleaned up after dispatch
- * or after a 60-second TTL.
+ * Conversation map — tracks Twilio ConversationSid (CH...) to account/peer/type.
+ *
+ * Replaces the old twilio_groups + twilio_inbound_pending tables. With the
+ * Conversations API, Twilio manages stable conversation IDs natively — no
+ * Jaccard matching or Event Streams polling is required.
+ *
+ * chat_type = 'direct': peer_id = E.164 phone of the remote party
+ * chat_type = 'group':  peer_id = NULL (conversationSid IS the peer ID)
  */
-const TWILIO_INBOUND_PENDING_SQL = `
-CREATE TABLE IF NOT EXISTS twilio_inbound_pending (
-  message_sid TEXT PRIMARY KEY,
-  recipients  TEXT NOT NULL,
-  created_at  INTEGER NOT NULL
+const TWILIO_CONVERSATION_MAP_SQL = `
+CREATE TABLE IF NOT EXISTS twilio_conversation_map (
+  conversation_sid TEXT    PRIMARY KEY,
+  account_id       TEXT    NOT NULL,
+  chat_type        TEXT    NOT NULL,
+  peer_id          TEXT,
+  participants     TEXT,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
 );
 `;
 
-/**
- * Persistent group registry. Maps a stable UUID-based group_id to its current
- * participant set (sorted E.164, our Twilio number excluded). Used so that the
- * same OpenClaw session survives participant add/remove events.
- */
-const TWILIO_GROUPS_SQL = `
-CREATE TABLE IF NOT EXISTS twilio_groups (
-  group_id     TEXT PRIMARY KEY,
-  account_id   TEXT NOT NULL,
-  participants TEXT NOT NULL,
-  created_at   INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL
-);
-`;
-
-const TWILIO_GROUPS_INDEX_SQL = `
-CREATE INDEX IF NOT EXISTS idx_twilio_groups_account
-  ON twilio_groups (account_id);
+const TWILIO_CONVERSATION_MAP_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tcm_account_peer
+  ON twilio_conversation_map (account_id, peer_id)
+  WHERE peer_id IS NOT NULL;
 `;
 
 // ── Resolve DB path ─────────────────────────────────────────────────────────
 
 function resolveDbPath(cfg?: TwilioConfig): string {
-  // 1. Twilio plugin config (shared preferred, top-level for backward compat)
   if (cfg?.shared?.dbPath?.trim()) return cfg.shared.dbPath.trim();
   if (cfg?.dbPath?.trim()) return cfg.dbPath.trim();
-
-  // 2. Environment variable
   if (process.env.TWILIO_DB_PATH?.trim()) return process.env.TWILIO_DB_PATH.trim();
-
-  // 3. Check if voipms-sms shares its DB path via env
   if (process.env.VOIPMS_DB_PATH?.trim()) return process.env.VOIPMS_DB_PATH.trim();
-
-  // 4. Default shared location
   const home = process.env.HOME ?? process.env.USERPROFILE ?? ".";
   return path.join(home, ".openclaw", "shared", "sms.db");
 }
@@ -150,8 +133,7 @@ function resolveDbPath(cfg?: TwilioConfig): string {
 
 /**
  * Open (or reuse) the SQLite database and ensure the required tables exist.
- *
- * Safe to call multiple times — the second call returns the same promise.
+ * Safe to call multiple times — subsequent calls return the same promise.
  */
 export function initDatabase(cfg?: TwilioConfig): Promise<void> {
   if (dbReady) return dbReady;
@@ -168,29 +150,15 @@ export function initDatabase(cfg?: TwilioConfig): Promise<void> {
       });
     });
 
-    // PRAGMAs — match voipms-sms settings for compat
     await dbRun("PRAGMA journal_mode=WAL;");
     await dbRun("PRAGMA busy_timeout=10000;");
     await dbRun("PRAGMA foreign_keys=ON;");
 
-    // Shared contacts table (voipms-compatible)
     await dbRun(CONTACTS_TABLE_SQL);
-
-    // Twilio conversation history
     await dbRun(TWILIO_CONVERSATIONS_SQL);
     await dbRun(TWILIO_CONVERSATIONS_INDEX_SQL);
-
-    // Event Streams correlation table
-    await dbRun(TWILIO_INBOUND_PENDING_SQL);
-
-    // Persistent group registry
-    await dbRun(TWILIO_GROUPS_SQL);
-    await dbRun(TWILIO_GROUPS_INDEX_SQL);
-
-    // Clean up stale pending rows (older than 60s) on every startup
-    await dbRun("DELETE FROM twilio_inbound_pending WHERE created_at < ?;", [
-      Date.now() - 60_000,
-    ]);
+    await dbRun(TWILIO_CONVERSATION_MAP_SQL);
+    await dbRun(TWILIO_CONVERSATION_MAP_INDEX_SQL);
 
     console.log(`[twilio:db] Database ready: ${dbPath}`);
   })();
@@ -231,148 +199,115 @@ export function getDbPath(cfg?: TwilioConfig): string {
   return resolveDbPath(cfg);
 }
 
-// ── Event Streams pending correlation ───────────────────────────────────────
+// ── Conversation map ─────────────────────────────────────────────────────────
 
-/**
- * Store the recipient list from an Event Streams event, keyed by MessageSid.
- * Used to enrich the regular webhook handler with group participant info.
- */
-export async function storeEventStreamRecipients(
-  messageSid: string,
-  recipients: string[],
-): Promise<void> {
-  await dbRun(
-    `INSERT OR REPLACE INTO twilio_inbound_pending (message_sid, recipients, created_at)
-     VALUES (?, ?, ?);`,
-    [messageSid, JSON.stringify(recipients), Date.now()],
-  );
-}
-
-/**
- * Fetch stored recipients for a MessageSid, or null if not yet received.
- */
-export async function getEventStreamRecipients(
-  messageSid: string,
-): Promise<string[] | null> {
-  const row = await dbGet<{ recipients: string }>(
-    "SELECT recipients FROM twilio_inbound_pending WHERE message_sid = ?;",
-    [messageSid],
-  );
-  if (!row) return null;
-  try {
-    return JSON.parse(row.recipients) as string[];
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Remove the pending row after dispatch (cleanup).
- */
-export async function deleteEventStreamRecipients(
-  messageSid: string,
-): Promise<void> {
-  await dbRun(
-    "DELETE FROM twilio_inbound_pending WHERE message_sid = ?;",
-    [messageSid],
-  );
-}
-
-// ── Group registry ───────────────────────────────────────────────────────────
-
-type GroupRow = {
-  group_id: string;
+type ConversationMapRow = {
+  conversation_sid: string;
   account_id: string;
-  participants: string;
+  chat_type: string;
+  peer_id: string | null;
+  participants: string | null;
   created_at: number;
   updated_at: number;
 };
 
 /**
- * Compute Jaccard similarity between two sorted participant arrays.
- * Returns a value in [0, 1].
+ * Insert or update a conversation mapping.
+ *
+ * For direct conversations: peerId = E.164 phone of the remote party.
+ * For group conversations: peerId = undefined (conversationSid is the peer).
  */
-function jaccardSimilarity(a: string[], b: string[]): number {
-  const setA = new Set(a);
-  const setB = new Set(b);
-  let intersection = 0;
-  for (const v of setA) if (setB.has(v)) intersection++;
-  const union = setA.size + setB.size - intersection;
-  return union === 0 ? 1 : intersection / union;
+export async function upsertConversationMap(params: {
+  conversationSid: string;
+  accountId: string;
+  chatType: "direct" | "group";
+  peerId?: string;
+  participants?: string[];
+}): Promise<void> {
+  const { conversationSid, accountId, chatType, peerId, participants } = params;
+  const now = Date.now();
+  await dbRun(
+    `INSERT INTO twilio_conversation_map
+       (conversation_sid, account_id, chat_type, peer_id, participants, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(conversation_sid) DO UPDATE SET
+       chat_type    = excluded.chat_type,
+       peer_id      = excluded.peer_id,
+       participants = excluded.participants,
+       updated_at   = excluded.updated_at;`,
+    [
+      conversationSid,
+      accountId,
+      chatType,
+      peerId ?? null,
+      participants ? JSON.stringify(participants) : null,
+      now,
+      now,
+    ],
+  );
 }
 
 /**
- * Resolve an existing group by participant-set similarity, or create a new one.
- *
- * Match threshold: Jaccard ≥ 0.5 (majority overlap). When multiple groups
- * match, the one with the highest score wins. On match, the stored participant
- * list is updated to reflect current membership (handles add/remove events).
- *
- * @param accountId  The Twilio account / DID identifier
- * @param participants  Sorted E.164 array — our Twilio number already excluded
+ * Look up a ConversationSid by account + peer phone number (direct conversations).
+ * Returns the ConversationSid or null if not found.
  */
+export async function getConversationByPeer(
+  accountId: string,
+  peerId: string,
+): Promise<string | null> {
+  const row = await dbGet<{ conversation_sid: string }>(
+    `SELECT conversation_sid FROM twilio_conversation_map
+     WHERE account_id = ? AND peer_id = ? LIMIT 1;`,
+    [accountId, peerId],
+  );
+  return row?.conversation_sid ?? null;
+}
+
 /**
- * Look up the participant list for an existing group by its UUID.
- * Returns null if the group is not found.
+ * Look up conversation metadata by ConversationSid.
+ * Returns null for unknown / first-ever message in this conversation.
  */
-export async function getGroupMembers(
-  groupId: string,
-): Promise<string[] | null> {
-  const row = await dbGet<{ participants: string }>(
-    "SELECT participants FROM twilio_groups WHERE group_id = ?;",
-    [groupId],
+export async function getConversationBySid(conversationSid: string): Promise<{
+  accountId: string;
+  chatType: "direct" | "group";
+  peerId?: string;
+  participants?: string[];
+} | null> {
+  const row = await dbGet<ConversationMapRow>(
+    `SELECT account_id, chat_type, peer_id, participants
+     FROM twilio_conversation_map WHERE conversation_sid = ? LIMIT 1;`,
+    [conversationSid],
   );
   if (!row) return null;
-  try {
-    return JSON.parse(row.participants) as string[];
-  } catch {
-    return null;
+  let participants: string[] | undefined;
+  if (row.participants) {
+    try { participants = JSON.parse(row.participants) as string[]; } catch { /* ignore */ }
   }
+  return {
+    accountId: row.account_id,
+    chatType: row.chat_type as "direct" | "group",
+    peerId: row.peer_id ?? undefined,
+    participants,
+  };
 }
 
-export async function resolveOrCreateGroup(
-  accountId: string,
-  participants: string[],
-): Promise<{ groupId: string; isNew: boolean }> {
-  const rows = await dbAll<GroupRow>(
-    "SELECT group_id, participants FROM twilio_groups WHERE account_id = ?;",
+/**
+ * List all group conversations for an account (for directory.listGroups).
+ */
+export async function listGroupConversations(accountId: string): Promise<
+  Array<{ conversationSid: string; participants?: string[] }>
+> {
+  const rows = await dbAll<ConversationMapRow>(
+    `SELECT conversation_sid, participants FROM twilio_conversation_map
+     WHERE account_id = ? AND chat_type = 'group'
+     ORDER BY updated_at DESC;`,
     [accountId],
   );
-
-  let bestId: string | null = null;
-  let bestScore = 0;
-
-  for (const row of rows) {
-    let stored: string[];
-    try {
-      stored = JSON.parse(row.participants) as string[];
-    } catch {
-      continue;
+  return rows.map((r) => {
+    let participants: string[] | undefined;
+    if (r.participants) {
+      try { participants = JSON.parse(r.participants) as string[]; } catch { /* ignore */ }
     }
-    const score = jaccardSimilarity(participants, stored);
-    if (score >= 0.5 && score > bestScore) {
-      bestScore = score;
-      bestId = row.group_id;
-    }
-  }
-
-  const now = Date.now();
-
-  if (bestId) {
-    // Update participant list (membership may have changed)
-    await dbRun(
-      "UPDATE twilio_groups SET participants = ?, updated_at = ? WHERE group_id = ?;",
-      [JSON.stringify(participants), now, bestId],
-    );
-    return { groupId: bestId, isNew: false };
-  }
-
-  // No match — create a new group
-  const groupId = crypto.randomUUID();
-  await dbRun(
-    `INSERT INTO twilio_groups (group_id, account_id, participants, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?);`,
-    [groupId, accountId, JSON.stringify(participants), now, now],
-  );
-  return { groupId, isNew: true };
+    return { conversationSid: r.conversation_sid, participants };
+  });
 }

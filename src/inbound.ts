@@ -1,46 +1,32 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type { TwilioInboundMessage, ResolvedTwilioAccount } from "./types.js";
+import type { TwilioConversationsWebhookPayload } from "./types.js";
 import { resolveTwilioAccountByDid } from "./accounts.js";
 import { normalizeE164 } from "./normalize.js";
 import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
 import { getTwilioRuntime } from "./runtime.js";
-import { sendTwilioMessage, sendTwilioGroupMessage } from "./send.js";
-import { getEventStreamRecipients, deleteEventStreamRecipients, resolveOrCreateGroup } from "./db.js";
+import { sendConversationsMessage } from "./send.js";
+import { upsertConversationMap, getConversationBySid } from "./db.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
-/**
- * Poll SQLite for Event Streams recipient data for up to `maxMs` milliseconds.
- * Returns the recipients array once available, or null if not received in time.
- */
-async function pollForRecipients(
-  messageSid: string,
-  maxMs: number,
-): Promise<string[] | null> {
-  const interval = 50;
-  const attempts = Math.ceil(maxMs / interval);
-  for (let i = 0; i < attempts; i++) {
-    const recipients = await getEventStreamRecipients(messageSid);
-    if (recipients !== null) return recipients;
-    await new Promise((r) => setTimeout(r, interval));
-  }
-  return null;
-}
-
 type InboundDeps = {
   cfg: OpenClawConfig;
-  log?: { info: (...args: any[]) => void; warn: (...args: any[]) => void; debug?: (...args: any[]) => void };
+  log?: {
+    info: (...args: any[]) => void;
+    warn: (...args: any[]) => void;
+    debug?: (...args: any[]) => void;
+  };
 };
 
 /**
- * Extract media attachments from Twilio inbound webhook body.
+ * Extract media attachments from a Conversations webhook payload.
+ * NumMedia is present for MMS messages.
  */
 function extractMedia(
-  body: TwilioInboundMessage,
+  body: TwilioConversationsWebhookPayload,
 ): Array<{ url: string; contentType: string }> {
   const numMedia = parseInt(body.NumMedia ?? "0", 10);
   const media: Array<{ url: string; contentType: string }> = [];
-
   for (let i = 0; i < numMedia; i++) {
     const url = body[`MediaUrl${i}`];
     const contentType = body[`MediaContentType${i}`];
@@ -48,250 +34,260 @@ function extractMedia(
       media.push({ url, contentType: contentType ?? "application/octet-stream" });
     }
   }
-
   return media;
 }
 
 /**
- * Determine the chat type from the inbound message.
- * Standard 1:1 SMS/MMS = "direct", group MMS = "group".
- */
-function determineChatType(body: TwilioInboundMessage): "direct" | "group" {
-  // Twilio group MMS messages include multiple addresses or group identifiers
-  // For now, we default to "direct" — group MMS detection can be extended
-  // by checking for multiple recipients or Twilio Conversations API metadata
-  return "direct";
-}
-
-/**
- * Build a session key for the inbound message.
- */
-function buildSessionKey(
-  accountId: string,
-  chatType: "direct" | "group",
-  senderId: string,
-  groupId?: string,
-): string {
-  if (chatType === "group" && groupId) {
-    return `twilio:${accountId}:group:${groupId}`;
-  }
-  return `twilio:${accountId}:direct:${senderId}`;
-}
-
-/**
- * Handle an inbound Twilio webhook request.
+ * Handle an inbound Twilio Conversations webhook (onMessageAdded).
  *
  * Flow:
- * 1. Parse webhook body
- * 2. Resolve account by To DID
- * 3. Determine chat type (direct vs group)
- * 4. Resolve agent route
+ * 1. Parse Conversations webhook payload
+ * 2. Ignore non-onMessageAdded events
+ * 3. Resolve account from MessagingBinding.ProxyAddress (our DID)
+ * 4. Resolve conversation type from DB (or query Twilio API on first encounter)
  * 5. Apply access control
- * 6. Upsert conversation reference
- * 7. Extract media
- * 8. Build inbound context + dispatch
- * 9. Respond with empty TwiML
+ * 6. Upsert conversation reference + log inbound
+ * 7. Respond 200 immediately
+ * 8. Async: build context, record session, dispatch reply
  */
 export async function handleInboundMessage(
   req: Request,
   res: Response,
   deps: InboundDeps,
 ): Promise<void> {
-  const body = req.body as TwilioInboundMessage;
+  const body = req.body as TwilioConversationsWebhookPayload;
   const { cfg, log } = deps;
 
-  const from = body.From;
-  const to = body.To;
-  const messageText = body.Body ?? "";
+  // Only handle message events
+  const eventType = body.EventType;
+  if (eventType !== "onMessageAdded") {
+    log?.debug?.(`[twilio:inbound] ignoring event: ${eventType}`);
+    res.status(200).send("OK");
+    return;
+  }
+
+  const conversationSid = body.ConversationSid;
   const messageSid = body.MessageSid;
+  const messageText = body.Body ?? "";
+  const author = body.Author ?? "";
 
-  if (!from || !to) {
-    log?.warn("[twilio:inbound] Missing From or To in webhook body");
-    res.status(400).type("text/xml").send("<Response></Response>");
+  // MessagingBinding.ProxyAddress = our Twilio DID (which account received this)
+  const proxyAddress = body["MessagingBinding.ProxyAddress"] ?? "";
+
+  if (!conversationSid || !author) {
+    log?.warn("[twilio:inbound] Missing ConversationSid or Author in webhook body");
+    res.status(400).send("Bad Request");
     return;
   }
 
-  const normalizedFrom = normalizeE164(from);
-  const normalizedTo = normalizeE164(to);
-
+  const normalizedFrom = normalizeE164(author);
   if (!normalizedFrom) {
-    log?.warn(`[twilio:inbound] Invalid From number: ${from}`);
-    res.status(400).type("text/xml").send("<Response></Response>");
+    // SDK identity participant (e.g. agent replying via SDK) — not an inbound SMS
+    log?.debug?.(`[twilio:inbound] ignoring non-E.164 author: ${author}`);
+    res.status(200).send("OK");
     return;
   }
 
-  // Resolve which account (DID) this message was sent to
-  const account = resolveTwilioAccountByDid(cfg, to);
+  // Resolve which account (DID) received this message
+  const account = resolveTwilioAccountByDid(cfg, proxyAddress);
   if (!account) {
-    log?.warn(`[twilio:inbound] No account found for DID: ${to}`);
-    res.status(200).type("text/xml").send("<Response></Response>");
+    log?.warn(`[twilio:inbound] No account found for proxy address: ${proxyAddress}`);
+    res.status(200).send("OK");
     return;
   }
 
   const accountId = account.accountId;
-  const chatType = determineChatType(body);
-  const sessionKey = buildSessionKey(accountId, chatType, normalizedFrom);
+  const ourDid = account.fromNumber ?? proxyAddress;
 
-  log?.info?.(
-    `[twilio:inbound] ${chatType} from ${normalizedFrom} → ${accountId} (${messageSid})`,
+  log?.info(
+    `[twilio:inbound] onMessageAdded conversation=${conversationSid} from=${normalizedFrom} → account=${accountId}`,
   );
 
-  // Check access control
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const allowFrom = account.config.allowFrom ?? [];
+  // Respond immediately — Conversations API doesn't need TwiML and has no timeout risk
+  res.status(200).send("OK");
 
-  if (dmPolicy === "disabled") {
-    log?.debug?.(`[twilio:inbound] DMs disabled for account ${accountId}`);
-    res.status(200).type("text/xml").send("<Response></Response>");
-    return;
-  }
-
-  if (
-    dmPolicy === "allowlist" &&
-    !allowFrom.includes("*") &&
-    !allowFrom.some((entry) => normalizeE164(entry) === normalizedFrom)
-  ) {
-    log?.debug?.(
-      `[twilio:inbound] ${normalizedFrom} not in allowFrom for ${accountId}`,
-    );
-    res.status(200).type("text/xml").send("<Response></Response>");
-    return;
-  }
-
-  // Upsert conversation reference + log inbound message
-  const store = createTwilioConversationStore({ accountId, cfg: { channels: { twilio: (cfg as any).channels?.twilio } } as any });
-  try {
-    await store.upsert(sessionKey, {
-      from: normalizedFrom,
-      to: normalizedTo ?? to,
-      accountId,
-      lastMessageSid: messageSid,
-      lastTimestamp: Date.now(),
-      isGroup: chatType === "group",
-    });
-    await store.logMessage({
-      phoneNumber: normalizedFrom,
-      did: normalizedTo ?? to,
-      accountId,
-      direction: "inbound",
-      message: messageText,
-      mediaUrl: extractMedia(body)[0]?.url,
-      messageSid,
-      chatType,
-      context: "twilio-channel-inbound",
-    });
-  } catch {
-    log?.debug?.("[twilio:inbound] Failed to write to conversation store");
-  }
-
-  // Contact enrichment from shared contacts table
-  let contactInfo: Record<string, unknown> | undefined;
-  try {
-    const twilioSection = (cfg as any).channels?.twilio as TwilioConfig | undefined;
-    const contactLookupCfg = twilioSection?.shared?.contactLookup ?? twilioSection?.contactLookup;
-    contactInfo = await lookupContact(normalizedFrom, {
-      table: contactLookupCfg?.table,
-      phoneColumn: contactLookupCfg?.phoneColumn,
-      phoneMatch: contactLookupCfg?.phoneMatch,
-      selectColumns: contactLookupCfg?.selectColumns,
-    });
-  } catch {
-    // Non-fatal
-  }
-
-  // Extract media attachments
-  const media = extractMedia(body);
-
-  // Respond immediately with empty TwiML so Twilio doesn't time out
-  res.status(200).type("text/xml").send("<Response></Response>");
-
-  // Process asynchronously — Twilio already has its 200 response, so we can
-  // wait as long as needed for Event Streams without any webhook timeout risk.
+  // All processing is async from here — the HTTP response is already sent
   void (async () => {
     try {
-      const ourNumber = normalizedTo ?? to;
+      // ── Resolve conversation type ────────────────────────────────────
+      const cachedConv = await getConversationBySid(conversationSid);
+      let chatType: "direct" | "group";
+      let groupParticipants: string[] | undefined;
 
-      // Poll for Event Streams data (group participant list).
-      // Event Streams typically arrives ~2s after the inbound webhook but can
-      // take longer. 30s is safe since the HTTP response was already sent.
-      const streamRecipients = await pollForRecipients(messageSid, 30_000);
-      await deleteEventStreamRecipients(messageSid).catch(() => {});
+      if (cachedConv) {
+        chatType = cachedConv.chatType;
+        groupParticipants = cachedConv.participants;
+      } else {
+        // First time seeing this conversation — query Twilio to classify it
+        chatType = "direct";
+        groupParticipants = undefined;
 
-      // Group detection: presence of a non-empty recipients array signals group MMS.
-      // recipients contains the other participants (not sender, not our DID).
-      // We rebuild the full member set by adding the sender back in.
-      const isGroup = Array.isArray(streamRecipients) && streamRecipients.length > 0;
+        try {
+          const twilio = await import("twilio");
+          const client = twilio.default(
+            account.credentials.accountSid,
+            account.credentials.authToken,
+          );
 
-      // Full participant set: sender + stream recipients, excluding our own number, sorted.
-      const groupMembers: string[] = isGroup
-        ? [
-            ...new Set(
-              [normalizedFrom, ...streamRecipients!.map((r) => normalizeE164(r) ?? r)].filter(
-                (r) => r !== normalizeE164(ourNumber),
-              ),
-            ),
-          ].sort()
-        : [];
-      const resolvedChatType: "direct" | "group" = isGroup ? "group" : "direct";
+          const participants = await client.conversations.v1
+            .conversations(conversationSid)
+            .participants.list();
 
-      // Stable UUID-based group ID — resolved from DB via Jaccard matching so
-      // the same session survives participant add/remove events.
-      let groupId: string | undefined;
-      if (isGroup) {
-        const resolved = await resolveOrCreateGroup(accountId, groupMembers);
-        groupId = resolved.groupId;
-        log?.info?.(
-          `[twilio:inbound] group ${resolved.isNew ? "created" : "matched"}: ${groupId} members=[${groupMembers.join(",")}]`,
+          // Count SMS participants (those with a messagingBinding.address)
+          const smsParticipants = participants.filter(
+            (p: any) => p.messagingBinding?.address,
+          );
+
+          if (smsParticipants.length >= 2) {
+            chatType = "group";
+            const ourNormalized = normalizeE164(ourDid);
+            groupParticipants = smsParticipants
+              .map((p: any) => normalizeE164(p.messagingBinding?.address ?? "") ?? "")
+              .filter((p) => p && p !== ourNormalized)
+              .sort();
+          }
+
+          log?.info(
+            `[twilio:inbound] conversation ${conversationSid} → ${chatType} (${smsParticipants.length} SMS participants)`,
+          );
+        } catch (apiErr) {
+          log?.warn(
+            `[twilio:inbound] Could not query participants for ${conversationSid}: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`,
+          );
+        }
+
+        // Cache in DB
+        await upsertConversationMap({
+          conversationSid,
+          accountId,
+          chatType,
+          peerId: chatType === "direct" ? normalizedFrom : undefined,
+          participants: groupParticipants,
+        }).catch((err) =>
+          log?.warn?.(
+            `[twilio:inbound] DB upsert failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
         );
       }
 
-      const peerId = groupId ?? normalizedFrom;
+      const peerId = chatType === "group" ? conversationSid : normalizedFrom;
 
-      // Other participants (everyone in the group except the sender and our number)
-      const otherParticipants = groupMembers.filter((m) => m !== normalizedFrom);
+      // ── Access control ───────────────────────────────────────────────
+      const dmPolicy = account.config.dmPolicy ?? "pairing";
+      const allowFrom = account.config.allowFrom ?? [];
 
-      log?.info?.(
-        `[twilio:inbound] dispatch ${resolvedChatType}${isGroup ? ` group=${groupId}` : ""} from ${normalizedFrom} → ${accountId}`,
-      );
+      if (dmPolicy === "disabled") {
+        log?.debug?.(`[twilio:inbound] DMs disabled for account ${accountId}`);
+        return;
+      }
 
+      if (
+        dmPolicy === "allowlist" &&
+        !allowFrom.includes("*") &&
+        !allowFrom.some((entry) => normalizeE164(entry) === normalizedFrom)
+      ) {
+        log?.debug?.(`[twilio:inbound] ${normalizedFrom} not in allowFrom for ${accountId}`);
+        return;
+      }
+
+      // ── Build session key ────────────────────────────────────────────
+      const sessionKey =
+        chatType === "group"
+          ? `twilio:${accountId}:group:${conversationSid}`
+          : `twilio:${accountId}:direct:${normalizedFrom}`;
+
+      // ── Upsert conversation reference + log inbound ──────────────────
+      const store = createTwilioConversationStore({
+        accountId,
+        cfg: { channels: { twilio: (cfg as any).channels?.twilio } } as any,
+      });
+      try {
+        await store.upsert(sessionKey, {
+          from: normalizedFrom,
+          to: ourDid,
+          accountId,
+          lastMessageSid: messageSid,
+          lastTimestamp: Date.now(),
+          isGroup: chatType === "group",
+          groupParticipants,
+        });
+        await store.logMessage({
+          phoneNumber: normalizedFrom,
+          did: ourDid,
+          accountId,
+          direction: "inbound",
+          message: messageText,
+          mediaUrl: extractMedia(body)[0]?.url,
+          messageSid,
+          chatType,
+          context: "twilio-channel-inbound",
+        });
+      } catch {
+        log?.debug?.("[twilio:inbound] Failed to write to conversation store");
+      }
+
+      // ── Contact enrichment ───────────────────────────────────────────
+      let contactInfo: Record<string, unknown> | undefined;
+      try {
+        const twilioSection = (cfg as any).channels?.twilio as TwilioConfig | undefined;
+        const contactLookupCfg =
+          twilioSection?.shared?.contactLookup ?? twilioSection?.contactLookup;
+        contactInfo = await lookupContact(normalizedFrom, {
+          table: contactLookupCfg?.table,
+          phoneColumn: contactLookupCfg?.phoneColumn,
+          phoneMatch: contactLookupCfg?.phoneMatch,
+          selectColumns: contactLookupCfg?.selectColumns,
+        });
+      } catch {
+        // Non-fatal
+      }
+
+      // ── Media ────────────────────────────────────────────────────────
+      const media = extractMedia(body);
+
+      // ── Routing ──────────────────────────────────────────────────────
       const runtime = getTwilioRuntime();
       const fromAddress =
-        resolvedChatType === "group"
-          ? `twilio:group:${peerId}`
+        chatType === "group"
+          ? `twilio:group:${conversationSid}`
           : `twilio:${normalizedFrom}`;
 
-      // Resolve agent route
       const route = runtime.channel.routing.resolveAgentRoute({
         cfg,
         channel: "twilio",
         accountId,
-        peer: { kind: resolvedChatType === "group" ? "group" : "user", id: peerId },
+        peer: { kind: chatType === "group" ? "group" : "user", id: peerId },
       });
 
-      // Build the inbound context
+      log?.info(
+        `[twilio:inbound] dispatch ${chatType}${chatType === "group" ? ` conversation=${conversationSid}` : ""} from=${normalizedFrom} → session=${route.sessionKey}`,
+      );
+
+      // ── Build inbound context ────────────────────────────────────────
       const inboundCtx: Record<string, unknown> = {
         Body: messageText,
         RawBody: messageText,
         CommandBody: messageText,
         From: fromAddress,
-        To: normalizedTo ?? to,
+        To: ourDid,
         SessionKey: route.sessionKey,
         AccountId: accountId,
         AgentId: route.agentId,
-        ChatType: resolvedChatType,
+        ChatType: chatType,
         SenderName: (contactInfo as any)?.name ?? normalizedFrom,
         SenderId: normalizedFrom,
         ContactInfo: contactInfo ?? null,
         Provider: "twilio",
         Surface: media.length > 0 ? "mms" : "sms",
         MessageSid: messageSid,
+        ConversationSid: conversationSid,
         Timestamp: Date.now(),
         OriginatingChannel: "twilio",
-        OriginatingTo: normalizedTo ?? to,
+        OriginatingTo: ourDid,
         OriginatingAccountId: accountId,
-        ...(isGroup && {
-          GroupId: groupId,
-          GroupParticipants: groupMembers,
+        ...(chatType === "group" && {
+          GroupId: conversationSid,
+          GroupParticipants: groupParticipants ?? [],
         }),
       };
 
@@ -301,9 +297,11 @@ export async function handleInboundMessage(
         inboundCtx.MediaContentType = media[0].contentType;
       }
 
-      // Record session
+      // ── Record session ───────────────────────────────────────────────
       try {
-        const storePath = runtime.channel.session.resolveStorePath(undefined, { agentId: route.agentId });
+        const storePath = runtime.channel.session.resolveStorePath(undefined, {
+          agentId: route.agentId,
+        });
         await runtime.channel.session.recordInboundSession({
           storePath,
           sessionKey: route.sessionKey,
@@ -311,23 +309,22 @@ export async function handleInboundMessage(
           updateLastRoute: {
             sessionKey: route.sessionKey,
             channel: "twilio" as any,
-            to: normalizedTo ?? to,
+            to: ourDid,
             accountId,
           },
           onRecordError: (err) => {
-            log?.warn?.(`[twilio:inbound] Session record error: ${err instanceof Error ? err.message : String(err)}`);
+            log?.warn?.(
+              `[twilio:inbound] Session record error: ${err instanceof Error ? err.message : String(err)}`,
+            );
           },
         });
       } catch (sessionErr) {
-        log?.warn?.(`[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`);
+        log?.warn?.(
+          `[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`,
+        );
       }
 
-      // Reply to all group members (groupMembers already includes sender, excludes our number)
-      const replyRecipients = isGroup ? groupMembers : [normalizedFrom];
-      log?.info?.(
-        `[twilio:inbound] replyRecipients=${JSON.stringify(replyRecipients)} isGroup=${isGroup}`,
-      );
-
+      // ── Dispatch reply via Conversations API ─────────────────────────
       await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: inboundCtx as any,
         cfg: cfg as any,
@@ -336,24 +333,18 @@ export async function handleInboundMessage(
             const text = (payload as any).text as string | undefined;
             if (!text?.trim()) return;
             const mediaUrl = (payload as any).mediaUrl as string | undefined;
-            log?.info?.(
-              `[twilio:inbound] deliver isGroup=${isGroup} replyRecipients=${JSON.stringify(replyRecipients)}`,
-            );
-            if (isGroup) {
-              await sendTwilioGroupMessage({
-                cfg,
-                to: replyRecipients[0],
-                recipients: replyRecipients,
-                text,
-                accountId,
-                mediaUrl,
-              });
-            } else {
-              await sendTwilioMessage({ cfg, to: normalizedFrom, text, accountId, mediaUrl });
-            }
+            await sendConversationsMessage({
+              cfg,
+              conversationSid,
+              text,
+              mediaUrl,
+              accountId,
+            });
           },
           onError: (err) => {
-            log?.warn?.(`[twilio:inbound] Reply dispatch error: ${err instanceof Error ? err.message : String(err)}`);
+            log?.warn?.(
+              `[twilio:inbound] Reply dispatch error: ${err instanceof Error ? err.message : String(err)}`,
+            );
           },
         },
       });
