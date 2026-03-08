@@ -287,13 +287,17 @@ export async function handleInboundMessage(
       // is speaking and that others are in the thread.
       let agentMessageBody = messageText;
       if (chatType === "group") {
-        const senderLabel = (contactInfo as any)?.name
-          ? `${(contactInfo as any).name} (${normalizedFrom})`
-          : normalizedFrom;
         const lines = [
           `***THIS IS A GROUP CONVERSATION, NOT PRIVATE***`,
-          `Sender: ${senderLabel}`,
+          `Sender: ${normalizedFrom}`,
         ];
+        if (contactInfo && typeof contactInfo === "object") {
+          for (const [key, val] of Object.entries(contactInfo)) {
+            if (val !== null && val !== undefined && val !== "") {
+              lines.push(`  ${key}: ${val}`);
+            }
+          }
+        }
         if (newParticipants.length > 0) {
           lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
         }
