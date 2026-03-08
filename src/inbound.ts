@@ -210,8 +210,9 @@ export async function handleInboundMessage(
     try {
       const ourNumber = normalizedTo ?? to;
 
-      // Poll for Event Streams data (group participant list)
-      const streamRecipients = await pollForRecipients(messageSid, 500);
+      // Poll for Event Streams data (group participant list).
+      // Event Streams typically arrives ~2s after the inbound webhook.
+      const streamRecipients = await pollForRecipients(messageSid, 3000);
       await deleteEventStreamRecipients(messageSid).catch(() => {});
 
       // Group detection: presence of a non-empty recipients array signals group MMS.
