@@ -29,7 +29,11 @@ export function resolveTwilioCredentials(
  * Only used for the default account.
  */
 export function resolveDefaultFromNumber(cfg?: TwilioConfig): string | undefined {
-  return cfg?.fromNumber?.trim() || process.env.TWILIO_FROM_NUMBER?.trim();
+  return (
+    cfg?.shared?.fromNumber?.trim() ||
+    cfg?.fromNumber?.trim() ||
+    process.env.TWILIO_FROM_NUMBER?.trim()
+  );
 }
 
 /**
@@ -40,6 +44,7 @@ export function resolveDefaultMessagingServiceSid(
   cfg?: TwilioConfig,
 ): string | undefined {
   return (
+    cfg?.shared?.messagingServiceSid?.trim() ||
     cfg?.messagingServiceSid?.trim() ||
     process.env.TWILIO_MESSAGING_SERVICE_SID?.trim()
   );

@@ -16,10 +16,11 @@ import {
   resolveTwilioAccount,
 } from "./accounts.js";
 import { normalizeE164, normalizeTwilioTarget, looksLikePhoneNumber } from "./normalize.js";
-import { sendTwilioMessage } from "./send.js";
+import { sendConversationsMessage, resolveOrCreateDirectConversation } from "./send.js";
 import { twilioOutbound } from "./outbound.js";
 import { twilioOnboardingAdapter } from "./onboarding.js";
 import { createTwilioConversationStore } from "./conversation-store.js";
+import { listGroupConversations } from "./db.js";
 import { monitorTwilioProvider } from "./monitor.js";
 
 function getTwilioSection(cfg: OpenClawConfig): TwilioConfig | undefined {
@@ -47,9 +48,15 @@ export const twilioPlugin: ChannelPlugin<ResolvedTwilioAccount> = {
     normalizeAllowEntry: (entry) =>
       normalizeE164(entry.replace(/^(twilio|sms|phone):/i, "")) ?? entry,
     notifyApproval: async ({ cfg, id, accountId }) => {
-      await sendTwilioMessage({
+      // Create/resolve conversation for the phone number, then send approval message
+      const conversationSid = await resolveOrCreateDirectConversation({
         cfg,
-        to: id,
+        accountId: accountId ?? "default",
+        toPhone: id,
+      });
+      await sendConversationsMessage({
+        cfg,
+        conversationSid,
         text: PAIRING_APPROVED_MESSAGE,
         accountId,
       });
@@ -304,22 +311,20 @@ export const twilioPlugin: ChannelPlugin<ResolvedTwilioAccount> = {
     },
 
     listGroups: async ({ cfg, accountId, query, limit }) => {
-      // Return known group conversations from store
+      // Return known group conversations from twilio_conversation_map
       try {
-        const store = createTwilioConversationStore({
-          accountId: accountId ?? DEFAULT_ACCOUNT_ID,
-        });
-        const entries = await store.list();
-        let groups = entries
-          .filter((e) => e.reference.isGroup)
-          .map((e) => ({
-            id: e.key,
-            name: e.key,
-          }));
+        const convAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+        const rows = await listGroupConversations(convAccountId);
+        let groups = rows.map((r) => ({
+          id: r.conversationSid,
+          name: r.participants?.join(", ") ?? r.conversationSid,
+        }));
 
         if (query) {
           const q = query.toLowerCase();
-          groups = groups.filter((g) => g.id.toLowerCase().includes(q));
+          groups = groups.filter(
+            (g) => g.id.toLowerCase().includes(q) || g.name.toLowerCase().includes(q),
+          );
         }
         if (limit && limit > 0) {
           groups = groups.slice(0, limit);

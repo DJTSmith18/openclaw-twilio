@@ -1,13 +1,17 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { getTwilioRuntime } from "./runtime.js";
-import { sendTwilioMessage, sendTwilioGroupMessage } from "./send.js";
-import { getGroupMembers } from "./db.js";
+import { sendConversationsMessage, resolveOrCreateDirectConversation } from "./send.js";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Twilio ConversationSid format: CH followed by 32 hex characters
+const CONV_SID_RE = /^CH[0-9a-f]{32}$/i;
 
 /**
- * Resolve send targets: if `to` is a group UUID, look up members from DB
- * and broadcast to all. Otherwise send directly to the phone number.
+ * Resolve send target and deliver via Twilio Conversations API.
+ *
+ * - `to` is a ConversationSid (CH...): send directly to that conversation.
+ *   Twilio fans out to all SMS participants (group or direct).
+ * - `to` is an E.164 phone number: resolve or create a 1:1 conversation
+ *   for that number, then send.
  */
 async function resolveSend(params: {
   cfg: unknown;
@@ -18,18 +22,20 @@ async function resolveSend(params: {
 }) {
   const { cfg, to, text, mediaUrl, accountId } = params;
 
-  if (UUID_RE.test(to)) {
-    // Group session — look up members and broadcast
-    const members = await getGroupMembers(to);
-    if (members && members.length > 0) {
-      console.log(`[twilio:outbound] group send groupId=${to} members=${members.join(",")}`);
-      return sendTwilioGroupMessage({ cfg, to: members[0], recipients: members, text, mediaUrl, accountId: accountId ?? undefined });
-    }
-    console.warn(`[twilio:outbound] group ${to} not found in DB — cannot send`);
-    return { ok: false as const, error: `Group ${to} not found` };
+  if (CONV_SID_RE.test(to)) {
+    // Group or known direct conversation — send to it directly
+    console.log(`[twilio:outbound] conversations send conversationSid=${to}`);
+    return sendConversationsMessage({ cfg, conversationSid: to, text, mediaUrl, accountId });
   }
 
-  return sendTwilioMessage({ cfg, to, text, mediaUrl, accountId: accountId ?? undefined });
+  // Proactive direct send to a phone number — resolve or create conversation
+  console.log(`[twilio:outbound] direct send to=${to}`);
+  const conversationSid = await resolveOrCreateDirectConversation({
+    cfg,
+    accountId: accountId ?? "default",
+    toPhone: to,
+  });
+  return sendConversationsMessage({ cfg, conversationSid, text, mediaUrl, accountId });
 }
 
 export const twilioOutbound: ChannelOutboundAdapter = {

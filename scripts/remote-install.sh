@@ -15,7 +15,8 @@
 # prompts work. Piping through bash consumes stdin and breaks all read commands.
 set -euo pipefail
 
-REPO_URL="https://github.com/DJTSmith18/openclaw-twilio.git"
+REPO_OWNER="DJTSmith18"
+REPO_NAME="openclaw-twilio"
 BRANCH="main"
 CUSTOM_DIR=""        # set by --dir; empty means "derive from openclaw base"
 FORCE_UPGRADE=false  # skip prompts, just pull + npm install
@@ -101,14 +102,6 @@ echo
 export CONFIG_FILE="$OPENCLAW_BASE/openclaw.json"
 PLUGIN_DIR="${CUSTOM_DIR:-$OPENCLAW_BASE/extensions/twilio}"
 
-# ── Prereq: git ───────────────────────────────────────────────────────────────
-if ! command -v git &>/dev/null; then
-  red "git is required but not found."
-  red "Install it first:  sudo apt install git   (or brew install git on macOS)"
-  exit 1
-fi
-green "git found: $(git --version)"
-
 # ── Detect whether this is an existing install ────────────────────────────────
 already_configured() {
   command -v jq &>/dev/null \
@@ -117,7 +110,7 @@ already_configured() {
 }
 
 IS_UPGRADE=false
-if [[ -d "$PLUGIN_DIR/.git" ]] && already_configured; then
+if [[ -f "$PLUGIN_DIR/package.json" ]] && already_configured; then
   IS_UPGRADE=true
 fi
 
@@ -130,19 +123,24 @@ if [[ "$FORCE_UPGRADE" == true ]]; then
   IS_UPGRADE=true
 fi
 
-# ── Clone or pull ─────────────────────────────────────────────────────────────
-if [[ -d "$PLUGIN_DIR/.git" ]]; then
-  cyan "Pulling latest code (branch: $BRANCH)..."
-  git -C "$PLUGIN_DIR" fetch origin
-  git -C "$PLUGIN_DIR" checkout "$BRANCH"
-  git -C "$PLUGIN_DIR" pull --ff-only origin "$BRANCH"
-  green "Repository updated at $PLUGIN_DIR"
-else
-  cyan "Cloning $REPO_URL (branch: $BRANCH) → $PLUGIN_DIR"
-  mkdir -p "$(dirname "$PLUGIN_DIR")"
-  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$PLUGIN_DIR"
-  green "Repository cloned to $PLUGIN_DIR"
-fi
+# ── Download plugin (curl tarball — no git required) ─────────────────────────
+TARBALL_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.tar.gz"
+cyan "Downloading plugin from: $TARBALL_URL"
+mkdir -p "$PLUGIN_DIR"
+
+_tmp_tar=$(mktemp /tmp/openclaw-twilio-XXXXXX.tar.gz)
+cyan "Saving tarball to: $_tmp_tar"
+curl -fsSL --progress-bar -H "Cache-Control: no-cache" "$TARBALL_URL?_=$(date +%s)" -o "$_tmp_tar"
+_tar_size=$(du -sh "$_tmp_tar" 2>/dev/null | cut -f1)
+green "Download complete ($_tar_size)"
+
+cyan "Extracting to: $PLUGIN_DIR"
+tar -xzv --strip-components=1 -C "$PLUGIN_DIR" -f "$_tmp_tar" 2>&1 | tail -20
+rm -f "$_tmp_tar"
+
+_file_count=$(find "$PLUGIN_DIR" -type f | wc -l | tr -d ' ')
+_plugin_version=$(jq -r '.version // "unknown"' "$PLUGIN_DIR/package.json" 2>/dev/null || echo "unknown")
+green "Extraction complete — $_file_count files in $PLUGIN_DIR (v${_plugin_version})"
 
 echo
 
@@ -206,9 +204,32 @@ if [[ "$IS_UPGRADE" == true ]]; then
         )
       ' "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
       green "Config migrated (backup: $_backup)"
-      yellow "Restart OpenClaw to apply: openclaw restart"
     else
-      cyan "Config is up to date — no migration needed."
+      cyan "Config structure is up to date."
+    fi
+
+    # ── Migrate top-level messagingServiceSid into shared ────────────────
+    _toplevel_msg=$(jq -r '.channels.twilio.messagingServiceSid // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    _shared_msg=$(jq -r '.channels.twilio.shared.messagingServiceSid // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    if [[ -n "$_toplevel_msg" && -z "$_shared_msg" ]]; then
+      cyan "Migrating messagingServiceSid into shared..."
+      _tmp=$(mktemp)
+      jq '.channels.twilio.shared.messagingServiceSid = .channels.twilio.messagingServiceSid
+          | del(.channels.twilio.messagingServiceSid)' \
+        "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
+      green "messagingServiceSid moved to shared: $_toplevel_msg"
+    fi
+
+    # ── Conversations API migration notice ────────────────────────────────
+    _has_base_url=$(jq -r '.channels.twilio.shared.webhook.baseUrl // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    if [[ -z "$_has_base_url" ]]; then
+      echo
+      yellow "NOTE: 'baseUrl' is not set in your config."
+      yellow "The plugin needs it to register your phone number with Twilio Conversations."
+      yellow "Add it under channels.twilio.shared.webhook.baseUrl then restart OpenClaw."
+      yellow "See docs/twilio-setup.md for details."
+    else
+      green "Conversations API: baseUrl configured → $_has_base_url"
     fi
   fi
 
@@ -216,20 +237,22 @@ if [[ "$IS_UPGRADE" == true ]]; then
   echo "  ╔═══════════════════════════════════════════════════════╗"
   echo "  ║           Upgrade complete!                           ║"
   echo "  ╚═══════════════════════════════════════════════════════╝"
+  green "  Plugin version: v${_plugin_version}"
   echo
   cyan "Current config summary:"
   if command -v jq &>/dev/null; then
     jq -r '
       .channels.twilio.shared |
-      "  Account SID:   " + (.accountSid[0:8] // "?") + "...",
-      "  Webhook port:  " + (.webhook.port // "?" | tostring),
-      "  Webhook path:  " + (.webhook.path // "?"),
-      "  DB path:       " + (.dbPath // "?")
+      "  Account SID:  " + (.accountSid[0:8] // "?") + "...",
+      "  Webhook port: " + (.webhook.port // "?" | tostring),
+      "  Webhook path: " + (.webhook.path // "?"),
+      "  Base URL:     " + (.webhook.baseUrl // "(not set — required for Conversations)"),
+      "  DB path:      " + (.dbPath // "?")
     ' "$CONFIG_FILE" 2>/dev/null || true
     echo
     jq -r '
       .channels.twilio.accounts // {} | to_entries[] |
-      "  DID:           " + .key + " (" + (.value.name // "unnamed") + ")"
+      "  DID:  " + .key + " (" + (.value.name // "unnamed") + ")"
     ' "$CONFIG_FILE" 2>/dev/null || true
   fi
   echo

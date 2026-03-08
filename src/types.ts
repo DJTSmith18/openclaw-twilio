@@ -27,6 +27,8 @@ export type TwilioSharedConfig = {
   accountSid?: string;
   authToken?: string;
   dbPath?: string;
+  /** Optional Conversations Service SID (IS...). Defaults to the account's default service. */
+  conversationServiceSid?: string;
   contactLookup?: {
     table?: string;
     phoneColumn?: string;
@@ -38,7 +40,6 @@ export type TwilioSharedConfig = {
     port?: number;
     path?: string;
     statusPath?: string;
-    streamPath?: string;
     baseUrl?: string;
   };
 };
@@ -70,24 +71,27 @@ export type ResolvedTwilioAccount = {
   config: TwilioAccountConfig;
 };
 
-export type TwilioInboundMessage = {
-  MessageSid: string;
+/**
+ * Twilio Conversations API webhook payload (form-encoded POST).
+ * Fired for onMessageAdded and other conversation events.
+ */
+export type TwilioConversationsWebhookPayload = {
+  EventType: string;
+  ConversationSid: string;
+  MessageSid?: string;
   AccountSid: string;
-  MessagingServiceSid?: string;
-  From: string;
-  To: string;
-  Body: string;
-  NumMedia: string;
-  NumSegments: string;
-  SmsStatus: string;
-  FromCity?: string;
-  FromState?: string;
-  FromZip?: string;
-  FromCountry?: string;
-  ToCity?: string;
-  ToState?: string;
-  ToZip?: string;
-  ToCountry?: string;
+  Body?: string;
+  Author?: string;              // sender's E.164 phone (SMS participants) or identity (chat)
+  ParticipantSid?: string;
+  Index?: string;
+  DateCreated?: string;
+  Attributes?: string;
+  // Messaging binding fields (flat form-encoded from Twilio)
+  "MessagingBinding.Address"?: string;    // sender's phone number
+  "MessagingBinding.ProxyAddress"?: string; // our Twilio DID
+  "MessagingBinding.Type"?: string;         // "sms", "whatsapp", etc.
+  // Media (MMS)
+  NumMedia?: string;
   [key: string]: string | undefined;
 };
 
@@ -114,42 +118,6 @@ export type SendTwilioMessageResult = {
   messageId?: string;
   conversationId?: string;
   error?: string;
-};
-
-/**
- * Twilio Event Streams CloudEvents envelope (Messaging.InboundMessageV1/5).
- * Twilio sends a JSON array of these envelopes per HTTP request.
- * Message-specific fields are nested under `data`.
- */
-export type TwilioEventStreamEvent = {
-  specversion: string;
-  type: string;
-  source: string;
-  id: string;
-  time?: string;
-  dataschema?: string;
-  datacontenttype?: string;
-  data: {
-    messageSid: string;
-    timestamp: string;
-    accountSid: string;
-    eventName?: string;
-    from: string;
-    to: string;
-    body?: string;
-    numMedia?: number;
-    numSegments?: number;
-    recipients?: string[];
-    messagingServiceSid?: string;
-    fromCity?: string;
-    fromState?: string;
-    fromZip?: string;
-    fromCountry?: string;
-    toCity?: string;
-    toState?: string;
-    toZip?: string;
-    toCountry?: string;
-  };
 };
 
 export type MonitorTwilioOpts = {

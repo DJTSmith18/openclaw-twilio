@@ -172,13 +172,20 @@ echo
 bold "Step 5: Webhook Configuration"
 
 prompt WEBHOOK_PORT "Webhook port" "3100"
-prompt WEBHOOK_PATH "Webhook path" "/sms"
-prompt STATUS_PATH "Status callback path" "/sms/status"
-prompt WEBHOOK_BASE_URL "Public base URL (for callbacks, leave blank if none)" ""
+prompt WEBHOOK_PATH "Webhook path" "/conversations/events"
+prompt WEBHOOK_BASE_URL "Public base URL (e.g. https://example.com — required for Twilio to send webhooks to you)" ""
 echo
 
-# Step 6: Access Policies
-bold "Step 6: Access Policies"
+# Step 6: Conversations Service SID
+bold "Step 6: Conversations Service SID"
+echo "  Find this in: Twilio Console → Conversations → Manage → Services → your service → SID"
+echo "  It starts with IS... — leave blank to use the Twilio default service."
+echo
+prompt CONV_SERVICE_SID "Conversations Service SID (IS..., or blank for default)" ""
+echo
+
+# Step 7: Access Policies
+bold "Step 7: Access Policies"
 
 prompt DM_POLICY "Default DM policy (open/pairing/disabled)" "pairing"
 
@@ -194,8 +201,8 @@ fi
 prompt GROUP_POLICY "Default group policy (open/allowlist/disabled)" "allowlist"
 echo
 
-# Step 7: Agent Bindings
-bold "Step 7: Agent Bindings"
+# Step 8: Agent Bindings
+bold "Step 8: Agent Bindings"
 
 AGENTS=$(jq -r '.agents[]?.id // empty' "$CONFIG_FILE" 2>/dev/null || true)
 if [[ -n "$AGENTS" ]]; then
@@ -213,9 +220,9 @@ done
 echo
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Step 8: Database Setup (shared SQLite — contacts + conversation history)
+# Step 9: Database Setup (shared SQLite — contacts + conversation history)
 # ──────────────────────────────────────────────────────────────────────────────
-bold "Step 8: Database Setup"
+bold "Step 9: Database Setup"
 
 DB_PATH=""
 DB_SOURCE=""
@@ -456,8 +463,8 @@ else
     }')
 fi
 
-# Step 9: Register in openclaw.json
-bold "Step 9: Registering plugin in openclaw.json"
+# Step 10: Register in openclaw.json
+bold "Step 10: Registering plugin in openclaw.json"
 
 backup="${CONFIG_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
 cp "$CONFIG_FILE" "$backup"
@@ -500,9 +507,8 @@ done
 WEBHOOK_JSON=$(jq -n \
   --argjson port "$WEBHOOK_PORT" \
   --arg path "$WEBHOOK_PATH" \
-  --arg statusPath "$STATUS_PATH" \
   --arg baseUrl "$WEBHOOK_BASE_URL" \
-  '{port: $port, path: $path, statusPath: $statusPath} + (if $baseUrl != "" then {baseUrl: $baseUrl} else {} end)')
+  '{port: $port, path: $path} + (if $baseUrl != "" then {baseUrl: $baseUrl} else {} end)')
 
 # Build shared infrastructure JSON — nested under "shared" so openclaw doctor
 # does not mistake these for single-account fields and attempt a migration.
@@ -510,6 +516,7 @@ SHARED_JSON=$(jq -n \
   --arg sid "$ACCOUNT_SID" \
   --arg token "$AUTH_TOKEN" \
   --arg dbPath "$DB_PATH" \
+  --arg convSid "$CONV_SERVICE_SID" \
   --argjson webhook "$WEBHOOK_JSON" \
   --argjson contactLookup "$CONTACT_LOOKUP_JSON" \
   '{
@@ -518,7 +525,7 @@ SHARED_JSON=$(jq -n \
     dbPath: $dbPath,
     contactLookup: $contactLookup,
     webhook: $webhook
-  }')
+  } + (if $convSid != "" then {conversationServiceSid: $convSid} else {} end)')
 
 # Build channel config.
 # Always use the accounts block even for a single DID — this keeps the
@@ -595,8 +602,9 @@ echo "  Contacts table:  ${CONTACTS_TABLE} (phone column: ${CONTACTS_PHONE_COL})
 echo "  History table:   twilio_conversations"
 echo
 echo "  Next Steps:"
-echo "    1. Restart OpenClaw: openclaw restart"
-echo "    2. Configure Twilio webhook URL to point to your server"
+echo "    1. Complete Twilio Console setup: see docs/twilio-setup.md"
+echo "    2. Restart OpenClaw: openclaw restart"
+echo "       The plugin will auto-register your DID with Twilio Conversations on startup."
 echo "    3. Test: bash scripts/test.sh"
 echo "    4. Manage settings: bash scripts/manage.sh"
 echo

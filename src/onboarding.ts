@@ -74,6 +74,21 @@ export const twilioOnboardingAdapter: ChannelOnboardingAdapter = {
       fromNumber = phoneResult.trim();
     }
 
+    // Step 3: Optional Conversation Service SID
+    const existingConvSid = section.shared?.conversationServiceSid ?? "";
+    let conversationServiceSid = existingConvSid;
+    if (!conversationServiceSid) {
+      const convSidResult = await prompter.prompt({
+        message:
+          "Conversations Service SID (IS...) — press Enter to use default service:",
+        validate: (v: string) =>
+          v === "" || v.startsWith("IS")
+            ? true
+            : "Must start with IS or leave blank",
+      });
+      conversationServiceSid = convSidResult.trim();
+    }
+
     // Apply config — credentials go into shared to avoid openclaw doctor warnings
     (nextCfg as any).channels = {
       ...(nextCfg as any).channels,
@@ -84,6 +99,7 @@ export const twilioOnboardingAdapter: ChannelOnboardingAdapter = {
           ...section.shared,
           accountSid,
           authToken,
+          ...(conversationServiceSid ? { conversationServiceSid } : {}),
         },
         fromNumber,
       },

@@ -32,10 +32,9 @@ backup_config() {
 }
 
 update_twilio_config() {
-  local filter="$1"
   local tmp
   tmp=$(mktemp)
-  jq "$filter" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+  jq "$@" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
 }
 
 prompt() {
@@ -58,7 +57,8 @@ require_config
 # ── Main menu ─────────────────────────────────────────────────────────────────
 while true; do
   echo
-  bold "Twilio Plugin Management"
+  _ver=$(jq -r '.version // "unknown"' "$(dirname "$0")/../package.json" 2>/dev/null || echo "unknown")
+  bold "Twilio Plugin Management (v${_ver})"
   echo "─────────────────────────"
   echo "  1) Twilio Credentials    — change Account SID, Auth Token"
   echo "  2) DID Management        — add/remove/enable/disable phone numbers"
@@ -69,9 +69,10 @@ while true; do
   echo "  7) RCS Settings          — enable/disable RCS, fallback to SMS"
   echo "  8) Status Callbacks      — configure delivery tracking"
   echo "  9) Database & Contacts   — view DB info, manage contacts"
-  echo "  10) Group Management     — list/delete group MMS sessions"
+  echo "  10) Conversation Map     — list/delete cached CH... session entries"
   echo "  11) View Current Config  — display full config as formatted JSON"
-  echo "  12) Save & Exit"
+  echo "  12) Conversations API Migration — set conversationServiceSid, messagingServiceSid"
+  echo "  13) Save & Exit"
   echo
   printf 'Choice: '
   read -r choice
@@ -329,10 +330,10 @@ while true; do
         CONTACT_TABLE=$(jq -r '.channels.twilio.shared.contactLookup.table // .channels.twilio.contactLookup.table // "contacts"' "$CONFIG_FILE" 2>/dev/null)
         CONTACT_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM ${CONTACT_TABLE};" 2>/dev/null || echo "0")
         CONV_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_conversations;" 2>/dev/null || echo "0")
-        GROUP_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_groups;" 2>/dev/null || echo "0")
+        CONVMAP_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_conversation_map;" 2>/dev/null || echo "0")
         echo "  Contacts ($CONTACT_TABLE): $CONTACT_COUNT rows"
-        echo "  Conversation history: $CONV_COUNT rows"
-        echo "  Group MMS sessions:  $GROUP_COUNT rows"
+        echo "  Conversation history:      $CONV_COUNT rows"
+        echo "  Conversation map (CH...):  $CONVMAP_COUNT rows"
         echo
         echo "  a) View recent contacts"
         echo "  b) Add a contact"
@@ -388,15 +389,15 @@ while true; do
       ;;
 
     10)
-      bold "Group MMS Management"
+      bold "Conversation Map (CH... sessions)"
       DB_PATH=$(jq -r '.channels.twilio.shared.dbPath // .channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
       [[ -z "$DB_PATH" ]] && DB_PATH="$HOME/.openclaw/shared/sms.db"
       if [[ ! -f "$DB_PATH" ]]; then
         red "Database not found at $DB_PATH"
       else
-        echo "  a) List recent groups"
-        echo "  b) Delete a group (forces new session on next message)"
-        echo "  c) Clear ALL groups (nuclear reset)"
+        echo "  a) List known conversations"
+        echo "  b) Delete a conversation entry (forces re-lookup on next message)"
+        echo "  c) Clear ALL conversation entries (nuclear reset)"
         echo "  d) Back"
         printf 'Choice: '
         read -r grp_sub
@@ -404,23 +405,23 @@ while true; do
           a)
             echo
             sqlite3 -header -column "$DB_PATH" \
-              "SELECT group_id, account_id, participants, datetime(updated_at/1000,'unixepoch') as updated FROM twilio_groups ORDER BY updated_at DESC LIMIT 20;" \
+              "SELECT conversation_sid, account_id, chat_type, peer_id, participants, datetime(updated_at/1000,'unixepoch') as updated FROM twilio_conversation_map ORDER BY updated_at DESC LIMIT 20;" \
               2>/dev/null || echo "(empty or error)"
             ;;
           b)
-            printf 'Group ID to delete: '
-            read -r DEL_GID
-            if [[ -n "$DEL_GID" ]]; then
-              sqlite3 "$DB_PATH" "DELETE FROM twilio_groups WHERE group_id = '${DEL_GID}';" 2>/dev/null \
-                && green "Group $DEL_GID deleted" || red "Delete failed"
+            printf 'ConversationSid (CH...) to delete: '
+            read -r DEL_SID
+            if [[ -n "$DEL_SID" ]]; then
+              sqlite3 "$DB_PATH" "DELETE FROM twilio_conversation_map WHERE conversation_sid = '${DEL_SID}';" 2>/dev/null \
+                && green "Entry $DEL_SID deleted" || red "Delete failed"
             fi
             ;;
           c)
-            printf 'Delete ALL groups? This will reset all group sessions. [y/N]: '
+            printf 'Delete ALL conversation map entries? [y/N]: '
             read -r confirm_clear
             if [[ "${confirm_clear}" == [yY]* ]]; then
-              sqlite3 "$DB_PATH" "DELETE FROM twilio_groups;" 2>/dev/null \
-                && green "All groups cleared" || red "Clear failed"
+              sqlite3 "$DB_PATH" "DELETE FROM twilio_conversation_map;" 2>/dev/null \
+                && green "All conversation map entries cleared" || red "Clear failed"
             fi
             ;;
           *) ;;
@@ -438,6 +439,59 @@ while true; do
       ;;
 
     12)
+      bold "Conversations API Migration"
+      echo "Migrates config from the old Twilio Messages API to the Conversations API."
+      echo
+      echo "Current values:"
+      _cur_conv=$(jq -r '.channels.twilio.shared.conversationServiceSid // "(not set)"' "$CONFIG_FILE" 2>/dev/null)
+      _cur_msg=$(jq -r '
+        .channels.twilio.accounts // {} | to_entries[] |
+        "  " + .key + ": messagingServiceSid=" + (.value.messagingServiceSid // "(not set)")
+      ' "$CONFIG_FILE" 2>/dev/null || jq -r '.channels.twilio.messagingServiceSid // "(not set)"' "$CONFIG_FILE" 2>/dev/null)
+      echo "  conversationServiceSid (shared): $_cur_conv"
+      echo "  messagingServiceSid (per DID):   $_cur_msg"
+      echo
+      echo "  a) Set conversationServiceSid (IS...)  — required for Conversations API"
+      echo "  b) Set messagingServiceSid for a DID (MG...) — recommended for outbound SMS"
+      echo "  c) Back"
+      printf 'Choice: '
+      read -r mig_sub
+      case "$mig_sub" in
+        a)
+          echo "Find this in: Twilio Console → Conversations → Manage → Services → your service → SID"
+          prompt NEW_CONV_SID "Conversations Service SID (IS...)" ""
+          if [[ -n "$NEW_CONV_SID" ]]; then
+            if [[ "$NEW_CONV_SID" != IS* ]]; then
+              yellow "Warning: SID does not start with IS — verify in Twilio Console."
+            fi
+            backup_config
+            update_twilio_config --arg v "$NEW_CONV_SID" \
+              '.channels.twilio.shared.conversationServiceSid = $v'
+            green "conversationServiceSid set: $NEW_CONV_SID"
+            yellow "Restart OpenClaw to apply. The plugin will register your DID with Twilio Conversations on startup."
+          fi
+          ;;
+        b)
+          echo "Find this in: Twilio Console → Messaging → Services → your service → SID"
+          echo "Current DIDs:"
+          jq -r '.channels.twilio.accounts // {} | to_entries[] | "  " + .key + " (" + (.value.name // "unnamed") + ")"' "$CONFIG_FILE" 2>/dev/null || echo "  (none)"
+          prompt MSG_DID "DID (phone number) to configure" ""
+          prompt NEW_MSG_SID "Messaging Service SID (MG...)" ""
+          if [[ -n "$MSG_DID" && -n "$NEW_MSG_SID" ]]; then
+            if [[ "$NEW_MSG_SID" != MG* ]]; then
+              yellow "Warning: SID does not start with MG — verify in Twilio Console."
+            fi
+            backup_config
+            update_twilio_config --arg d "$MSG_DID" --arg v "$NEW_MSG_SID" \
+              '.channels.twilio.accounts[$d].messagingServiceSid = $v'
+            green "messagingServiceSid set for $MSG_DID: $NEW_MSG_SID"
+          fi
+          ;;
+        *) ;;
+      esac
+      ;;
+
+    13)
       green "Done."
       exit 0
       ;;
