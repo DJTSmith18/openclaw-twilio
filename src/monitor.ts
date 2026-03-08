@@ -188,17 +188,20 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   // Mount Event Streams sink — stores recipient list for group MMS detection
   app.post(streamPath, async (req: any, res: any) => {
     res.status(200).send("OK");
-    log.debug(`[twilio:stream] POST received — body keys: ${Object.keys(req.body ?? {}).join(", ")}`);
     try {
       const event = req.body as TwilioEventStreamEvent;
       const messageSid = event?.data?.messageSid;
       const recipients = event?.data?.recipients;
-      log.debug(`[twilio:stream] event type=${event?.type} messageSid=${messageSid} recipients=${JSON.stringify(recipients)}`);
+      log.info(
+        `[twilio:stream] received type=${event?.type ?? "(unknown)"} messageSid=${messageSid ?? "(none)"} recipients=${JSON.stringify(recipients ?? null)}`,
+      );
       if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
         await storeEventStreamRecipients(messageSid, recipients);
-        log.debug(
-          `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients`,
+        log.info(
+          `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients: ${recipients.join(", ")}`,
         );
+      } else if (messageSid) {
+        log.info(`[twilio:stream] ${messageSid} — no recipients array (1:1 message or wrong schema version)`);
       }
     } catch (err: unknown) {
       log.warn(
