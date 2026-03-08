@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
-# Remote installer for the OpenClaw Twilio channel plugin.
+# Remote installer / upgrader for the OpenClaw Twilio channel plugin.
 #
-# Usage (one-liner on destination machine):
+# Fresh install (one-liner):
 #   curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash
 #
-# Or, to pin to a specific branch/tag:
-#   curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --branch main
+# Upgrade existing install:
+#   curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --upgrade
+#
+# Force full reconfiguration on an existing install:
+#   curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --reconfigure
 set -euo pipefail
 
 REPO_URL="https://github.com/DJTSmith18/openclaw-twilio.git"
 BRANCH="main"
-CUSTOM_DIR=""   # set by --dir; empty means "derive from openclaw base"
+CUSTOM_DIR=""        # set by --dir; empty means "derive from openclaw base"
+FORCE_UPGRADE=false  # skip prompts, just pull + npm install
+FORCE_RECONFIGURE=false  # run full install.sh even on existing install
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --branch|-b) BRANCH="$2"; shift 2 ;;
-    --dir|-d)    CUSTOM_DIR="$2"; shift 2 ;;
+    --branch|-b)      BRANCH="$2"; shift 2 ;;
+    --dir|-d)         CUSTOM_DIR="$2"; shift 2 ;;
+    --upgrade|-u)     FORCE_UPGRADE=true; shift ;;
+    --reconfigure|-r) FORCE_RECONFIGURE=true; shift ;;
     --help|-h)
-      echo "Usage: remote-install.sh [--branch <branch>] [--dir <path>]"
-      echo "  --branch, -b   Git branch/tag to clone (default: main)"
-      echo "  --dir,    -d   Plugin install directory (default: <openclaw-base>/extensions/twilio)"
+      echo "Usage: remote-install.sh [options]"
+      echo "  --branch,      -b   Git branch/tag to clone (default: main)"
+      echo "  --dir,         -d   Plugin install directory (default: <openclaw-base>/extensions/twilio)"
+      echo "  --upgrade,     -u   Pull latest code and update deps; skip all config prompts"
+      echo "  --reconfigure, -r   Force full interactive reconfiguration on an existing install"
       exit 0
       ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -36,7 +45,7 @@ bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
 
 echo
 echo "  ╔═══════════════════════════════════════════════════════╗"
-echo "  ║        OpenClaw Twilio Plugin — Remote Installer      ║"
+echo "  ║     OpenClaw Twilio Plugin — Install / Upgrade        ║"
 echo "  ╚═══════════════════════════════════════════════════════╝"
 echo
 
@@ -96,9 +105,30 @@ if ! command -v git &>/dev/null; then
 fi
 green "git found: $(git --version)"
 
-# ── Clone or update ───────────────────────────────────────────────────────────
+# ── Detect whether this is an existing install ────────────────────────────────
+already_configured() {
+  command -v jq &>/dev/null \
+    && [[ -f "$CONFIG_FILE" ]] \
+    && [[ "$(jq -r '.channels.twilio.enabled // empty' "$CONFIG_FILE" 2>/dev/null)" != "" ]]
+}
+
+IS_UPGRADE=false
+if [[ -d "$PLUGIN_DIR/.git" ]] && already_configured; then
+  IS_UPGRADE=true
+fi
+
+# --reconfigure overrides --upgrade and auto-detect
+if [[ "$FORCE_RECONFIGURE" == true ]]; then
+  IS_UPGRADE=false
+fi
+# --upgrade flag forces upgrade mode even if auto-detect missed it
+if [[ "$FORCE_UPGRADE" == true ]]; then
+  IS_UPGRADE=true
+fi
+
+# ── Clone or pull ─────────────────────────────────────────────────────────────
 if [[ -d "$PLUGIN_DIR/.git" ]]; then
-  cyan "Plugin directory already exists — pulling latest changes..."
+  cyan "Pulling latest code (branch: $BRANCH)..."
   git -C "$PLUGIN_DIR" fetch origin
   git -C "$PLUGIN_DIR" checkout "$BRANCH"
   git -C "$PLUGIN_DIR" pull --ff-only origin "$BRANCH"
@@ -112,10 +142,50 @@ fi
 
 echo
 
-# ── Hand off to the bundled installer ────────────────────────────────────────
+# Export so install.sh uses the correct paths if invoked below.
+export PLUGIN_DIR
+
+# ── Upgrade path: update deps only, preserve all config ──────────────────────
+if [[ "$IS_UPGRADE" == true ]]; then
+  bold "Existing install detected — upgrading dependencies only."
+  cyan "Existing config will not be modified."
+  echo
+
+  if [[ -f "$PLUGIN_DIR/package.json" ]]; then
+    cyan "Running npm install..."
+    npm install --omit=dev --prefix "$PLUGIN_DIR" 2>&1 | tail -5 || true
+    green "Dependencies updated"
+  fi
+
+  echo
+  echo "  ╔═══════════════════════════════════════════════════════╗"
+  echo "  ║           Upgrade complete!                           ║"
+  echo "  ╚═══════════════════════════════════════════════════════╝"
+  echo
+  cyan "Current config summary:"
+  if command -v jq &>/dev/null; then
+    jq -r '
+      .channels.twilio |
+      "  Account SID:   " + (.accountSid[0:8] // "?") + "...",
+      "  Webhook port:  " + (.webhook.port // "?" | tostring),
+      "  Webhook path:  " + (.webhook.path // "?"),
+      "  DB path:       " + (.dbPath // "?"),
+      "  DM policy:     " + (.dmPolicy // "?")
+    ' "$CONFIG_FILE" 2>/dev/null || true
+    echo
+    jq -r '
+      .channels.twilio.accounts // {} | to_entries[] |
+      "  DID:           " + .key + " (" + (.value.name // "unnamed") + ")"
+    ' "$CONFIG_FILE" 2>/dev/null || true
+  fi
+  echo
+  echo "  To apply changes: openclaw restart"
+  echo "  To reconfigure:   re-run with --reconfigure"
+  echo
+  exit 0
+fi
+
+# ── Fresh install path ────────────────────────────────────────────────────────
 bold "Launching interactive installer..."
 echo
-# Export PLUGIN_DIR so install.sh uses the same directory we cloned into,
-# rather than its own hardcoded default.
-export PLUGIN_DIR
 exec bash "$PLUGIN_DIR/scripts/install.sh"

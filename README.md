@@ -38,6 +38,20 @@ The script will:
 2. Clone the repository into `<openclaw-base>/extensions/twilio`
 3. Launch the interactive installer automatically
 
+**Upgrade an existing install** (pulls latest code + updates deps, preserves all config):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --upgrade
+```
+
+The script also auto-detects an existing install — if `channels.twilio` is already present in `openclaw.json` it will upgrade automatically without prompting.
+
+**Force full reconfiguration** on an existing install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DJTSmith18/openclaw-twilio/main/scripts/remote-install.sh | bash -s -- --reconfigure
+```
+
 **Pin to a specific branch or tag:**
 
 ```bash
@@ -287,12 +301,16 @@ When `webhook.baseUrl` is configured, the plugin validates the `X-Twilio-Signatu
 
 ### `scripts/remote-install.sh`
 
-One-liner remote installer. Detects OpenClaw, clones the repo, and launches `install.sh` automatically. Intended to be fetched and run via `curl` — see [Quick Start](#quick-start).
+One-liner remote installer and upgrader. Detects OpenClaw, clones or pulls the repo, and either upgrades in place or launches `install.sh` for a fresh configuration. Intended to be fetched and run via `curl` — see [Quick Start](#quick-start).
+
+Automatically detects an existing install: if `channels.twilio` is already present in `openclaw.json`, it upgrades code and dependencies without touching configuration.
 
 ```bash
 # Options
 bash scripts/remote-install.sh --branch <branch>   # pin to branch/tag (default: main)
 bash scripts/remote-install.sh --dir <path>         # custom plugin directory
+bash scripts/remote-install.sh --upgrade            # force upgrade mode (skip prompts)
+bash scripts/remote-install.sh --reconfigure        # force full interactive reconfiguration
 ```
 
 ### `scripts/install.sh`
