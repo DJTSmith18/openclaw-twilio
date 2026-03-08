@@ -197,22 +197,24 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
           : (() => {
               try { return JSON.parse(req.rawBody ?? "{}"); } catch { return {}; }
             })();
-      log.info(`[twilio:stream] rawBody=${req.rawBody?.length ?? 0}b bodyParsed=${Object.keys(req.body ?? {}).length > 0} contentType="${req.headers["content-type"] ?? "none"}"`);
-      log.info(`[twilio:stream] body keys: ${Object.keys(parsedBody).join(", ")}`);
-      log.info(`[twilio:stream] body dump: ${JSON.stringify(parsedBody).slice(0, 500)}`);
-      const event = parsedBody as TwilioEventStreamEvent;
-      const messageSid = event?.messageSid;
-      const recipients = event?.recipients;
-      log.info(
-        `[twilio:stream] received eventName=${event?.eventName ?? "(unknown)"} messageSid=${messageSid ?? "(none)"} recipients=${JSON.stringify(recipients ?? null)}`,
-      );
-      if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
-        await storeEventStreamRecipients(messageSid, recipients);
+      // Twilio sends a JSON array of CloudEvents envelopes; process each one
+      const events: TwilioEventStreamEvent[] = Array.isArray(parsedBody)
+        ? parsedBody
+        : [parsedBody];
+      for (const event of events) {
+        const messageSid = event?.data?.messageSid;
+        const recipients = event?.data?.recipients;
         log.info(
-          `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients: ${recipients.join(", ")}`,
+          `[twilio:stream] received type=${event?.type ?? "(unknown)"} messageSid=${messageSid ?? "(none)"} recipients=${JSON.stringify(recipients ?? null)}`,
         );
-      } else if (messageSid) {
-        log.info(`[twilio:stream] ${messageSid} — no recipients (1:1 message)`);
+        if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
+          await storeEventStreamRecipients(messageSid, recipients);
+          log.info(
+            `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients: ${recipients.join(", ")}`,
+          );
+        } else if (messageSid) {
+          log.info(`[twilio:stream] ${messageSid} — no recipients (1:1 message)`);
+        }
       }
     } catch (err: unknown) {
       log.warn(

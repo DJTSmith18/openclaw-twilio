@@ -117,31 +117,39 @@ export type SendTwilioMessageResult = {
 };
 
 /**
- * Twilio Event Streams inbound message event (Messaging.InboundMessageV1/5).
- * Fields are flat at the root — no CloudEvents data envelope.
- * The `recipients` array contains all group MMS participants (group messages only).
+ * Twilio Event Streams CloudEvents envelope (Messaging.InboundMessageV1/5).
+ * Twilio sends a JSON array of these envelopes per HTTP request.
+ * Message-specific fields are nested under `data`.
  */
 export type TwilioEventStreamEvent = {
-  messageSid: string;
-  timestamp: string;
-  accountSid: string;
-  eventName: string;
-  from: string;
-  to: string;
-  body?: string;
-  numMedia?: number;
-  numSegments?: number;
-  recipients?: string[];
-  messagingServiceSid?: string;
-  optOutType?: string;
-  fromCity?: string;
-  fromState?: string;
-  fromZip?: string;
-  fromCountry?: string;
-  toCity?: string;
-  toState?: string;
-  toZip?: string;
-  toCountry?: string;
+  specversion: string;
+  type: string;
+  source: string;
+  id: string;
+  time?: string;
+  dataschema?: string;
+  datacontenttype?: string;
+  data: {
+    messageSid: string;
+    timestamp: string;
+    accountSid: string;
+    eventName?: string;
+    from: string;
+    to: string;
+    body?: string;
+    numMedia?: number;
+    numSegments?: number;
+    recipients?: string[];
+    messagingServiceSid?: string;
+    fromCity?: string;
+    fromState?: string;
+    fromZip?: string;
+    fromCountry?: string;
+    toCity?: string;
+    toState?: string;
+    toZip?: string;
+    toCountry?: string;
+  };
 };
 
 export type MonitorTwilioOpts = {
