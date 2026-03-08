@@ -76,7 +76,7 @@ async function setupAddressConfiguration(params: {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     // 409 / duplicate = already configured — not an error
-    if (msg.includes("already exists") || msg.includes("409")) {
+    if (msg.includes("already exists") || msg.includes("409") || msg.includes("Conflict")) {
       log.info(
         `[twilio:gateway] Address configuration already exists for ${fromNumber}`,
       );
