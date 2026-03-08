@@ -54,9 +54,8 @@ prompt() {
 
 prompt_secret() {
   local var="$1" prompt_text="$2" default="$3"
-  printf '%s [%s]: ' "$prompt_text" "${default:+(hidden)}"
-  read -rs input
-  echo
+  printf '%s [%s]: ' "$prompt_text" "${default:+(set)}"
+  read -r input
   eval "$var=\"\${input:-$default}\""
 }
 
