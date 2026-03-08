@@ -108,6 +108,26 @@ CREATE TABLE IF NOT EXISTS twilio_inbound_pending (
 );
 `;
 
+/**
+ * Persistent group registry. Maps a stable UUID-based group_id to its current
+ * participant set (sorted E.164, our Twilio number excluded). Used so that the
+ * same OpenClaw session survives participant add/remove events.
+ */
+const TWILIO_GROUPS_SQL = `
+CREATE TABLE IF NOT EXISTS twilio_groups (
+  group_id     TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL,
+  participants TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+`;
+
+const TWILIO_GROUPS_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS idx_twilio_groups_account
+  ON twilio_groups (account_id);
+`;
+
 // ── Resolve DB path ─────────────────────────────────────────────────────────
 
 function resolveDbPath(cfg?: TwilioConfig): string {
@@ -162,6 +182,10 @@ export function initDatabase(cfg?: TwilioConfig): Promise<void> {
 
     // Event Streams correlation table
     await dbRun(TWILIO_INBOUND_PENDING_SQL);
+
+    // Persistent group registry
+    await dbRun(TWILIO_GROUPS_SQL);
+    await dbRun(TWILIO_GROUPS_INDEX_SQL);
 
     // Clean up stale pending rows (older than 60s) on every startup
     await dbRun("DELETE FROM twilio_inbound_pending WHERE created_at < ?;", [
@@ -252,4 +276,84 @@ export async function deleteEventStreamRecipients(
     "DELETE FROM twilio_inbound_pending WHERE message_sid = ?;",
     [messageSid],
   );
+}
+
+// ── Group registry ───────────────────────────────────────────────────────────
+
+type GroupRow = {
+  group_id: string;
+  account_id: string;
+  participants: string;
+  created_at: number;
+  updated_at: number;
+};
+
+/**
+ * Compute Jaccard similarity between two sorted participant arrays.
+ * Returns a value in [0, 1].
+ */
+function jaccardSimilarity(a: string[], b: string[]): number {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  let intersection = 0;
+  for (const v of setA) if (setB.has(v)) intersection++;
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+/**
+ * Resolve an existing group by participant-set similarity, or create a new one.
+ *
+ * Match threshold: Jaccard ≥ 0.5 (majority overlap). When multiple groups
+ * match, the one with the highest score wins. On match, the stored participant
+ * list is updated to reflect current membership (handles add/remove events).
+ *
+ * @param accountId  The Twilio account / DID identifier
+ * @param participants  Sorted E.164 array — our Twilio number already excluded
+ */
+export async function resolveOrCreateGroup(
+  accountId: string,
+  participants: string[],
+): Promise<{ groupId: string; isNew: boolean }> {
+  const rows = await dbAll<GroupRow>(
+    "SELECT group_id, participants FROM twilio_groups WHERE account_id = ?;",
+    [accountId],
+  );
+
+  let bestId: string | null = null;
+  let bestScore = 0;
+
+  for (const row of rows) {
+    let stored: string[];
+    try {
+      stored = JSON.parse(row.participants) as string[];
+    } catch {
+      continue;
+    }
+    const score = jaccardSimilarity(participants, stored);
+    if (score >= 0.5 && score > bestScore) {
+      bestScore = score;
+      bestId = row.group_id;
+    }
+  }
+
+  const now = Date.now();
+
+  if (bestId) {
+    // Update participant list (membership may have changed)
+    await dbRun(
+      "UPDATE twilio_groups SET participants = ?, updated_at = ? WHERE group_id = ?;",
+      [JSON.stringify(participants), now, bestId],
+    );
+    return { groupId: bestId, isNew: false };
+  }
+
+  // No match — create a new group
+  const groupId = crypto.randomUUID();
+  await dbRun(
+    `INSERT INTO twilio_groups (group_id, account_id, participants, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?);`,
+    [groupId, accountId, JSON.stringify(participants), now, now],
+  );
+  return { groupId, isNew: true };
 }

@@ -69,8 +69,9 @@ while true; do
   echo "  7) RCS Settings          — enable/disable RCS, fallback to SMS"
   echo "  8) Status Callbacks      — configure delivery tracking"
   echo "  9) Database & Contacts   — view DB info, manage contacts"
-  echo "  10) View Current Config  — display full config as formatted JSON"
-  echo "  11) Save & Exit"
+  echo "  10) Group Management     — list/delete group MMS sessions"
+  echo "  11) View Current Config  — display full config as formatted JSON"
+  echo "  12) Save & Exit"
   echo
   printf 'Choice: '
   read -r choice
@@ -328,8 +329,10 @@ while true; do
         CONTACT_TABLE=$(jq -r '.channels.twilio.shared.contactLookup.table // .channels.twilio.contactLookup.table // "contacts"' "$CONFIG_FILE" 2>/dev/null)
         CONTACT_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM ${CONTACT_TABLE};" 2>/dev/null || echo "0")
         CONV_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_conversations;" 2>/dev/null || echo "0")
+        GROUP_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_groups;" 2>/dev/null || echo "0")
         echo "  Contacts ($CONTACT_TABLE): $CONTACT_COUNT rows"
         echo "  Conversation history: $CONV_COUNT rows"
+        echo "  Group MMS sessions:  $GROUP_COUNT rows"
         echo
         echo "  a) View recent contacts"
         echo "  b) Add a contact"
@@ -385,6 +388,47 @@ while true; do
       ;;
 
     10)
+      bold "Group MMS Management"
+      DB_PATH=$(jq -r '.channels.twilio.shared.dbPath // .channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
+      [[ -z "$DB_PATH" ]] && DB_PATH="$HOME/.openclaw/shared/sms.db"
+      if [[ ! -f "$DB_PATH" ]]; then
+        red "Database not found at $DB_PATH"
+      else
+        echo "  a) List recent groups"
+        echo "  b) Delete a group (forces new session on next message)"
+        echo "  c) Clear ALL groups (nuclear reset)"
+        echo "  d) Back"
+        printf 'Choice: '
+        read -r grp_sub
+        case "$grp_sub" in
+          a)
+            echo
+            sqlite3 -header -column "$DB_PATH" \
+              "SELECT group_id, account_id, participants, datetime(updated_at/1000,'unixepoch') as updated FROM twilio_groups ORDER BY updated_at DESC LIMIT 20;" \
+              2>/dev/null || echo "(empty or error)"
+            ;;
+          b)
+            printf 'Group ID to delete: '
+            read -r DEL_GID
+            if [[ -n "$DEL_GID" ]]; then
+              sqlite3 "$DB_PATH" "DELETE FROM twilio_groups WHERE group_id = '${DEL_GID}';" 2>/dev/null \
+                && green "Group $DEL_GID deleted" || red "Delete failed"
+            fi
+            ;;
+          c)
+            printf 'Delete ALL groups? This will reset all group sessions. [y/N]: '
+            read -r confirm_clear
+            if [[ "${confirm_clear}" == [yY]* ]]; then
+              sqlite3 "$DB_PATH" "DELETE FROM twilio_groups;" 2>/dev/null \
+                && green "All groups cleared" || red "Clear failed"
+            fi
+            ;;
+          *) ;;
+        esac
+      fi
+      ;;
+
+    11)
       bold "Current Twilio Configuration"
       echo "─────────────────────────────"
       jq '.channels.twilio' "$CONFIG_FILE" 2>/dev/null || echo "(not configured)"
@@ -393,7 +437,7 @@ while true; do
       jq '[.bindings[]? | select(.match.channel == "twilio")]' "$CONFIG_FILE" 2>/dev/null || echo "[]"
       ;;
 
-    11)
+    12)
       green "Done."
       exit 0
       ;;

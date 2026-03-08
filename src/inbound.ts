@@ -5,7 +5,7 @@ import { normalizeE164 } from "./normalize.js";
 import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
 import { getTwilioRuntime } from "./runtime.js";
 import { sendTwilioMessage, sendTwilioGroupMessage } from "./send.js";
-import { getEventStreamRecipients, deleteEventStreamRecipients } from "./db.js";
+import { getEventStreamRecipients, deleteEventStreamRecipients, resolveOrCreateGroup } from "./db.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
@@ -214,17 +214,33 @@ export async function handleInboundMessage(
       const streamRecipients = await pollForRecipients(messageSid, 500);
       await deleteEventStreamRecipients(messageSid).catch(() => {});
 
-      // Determine group vs direct from recipients
-      const otherParticipants: string[] = streamRecipients
+      // All participants except our own Twilio number (sender stays in).
+      // Sorted for stable comparison in the group registry.
+      const groupMembers: string[] = streamRecipients
         ? streamRecipients
             .map((r) => normalizeE164(r) ?? r)
-            .filter((r) => r !== normalizeE164(ourNumber) && r !== normalizeE164(normalizedFrom))
+            .filter((r) => r !== normalizeE164(ourNumber))
+            .sort()
         : [];
 
-      const isGroup = otherParticipants.length > 0;
+      const isGroup = groupMembers.length > 1; // more than just the sender
       const resolvedChatType: "direct" | "group" = isGroup ? "group" : "direct";
-      const groupId = isGroup ? [...otherParticipants].sort().join(":") : undefined;
+
+      // Stable UUID-based group ID — resolved from DB via Jaccard matching so
+      // the same session survives participant add/remove events.
+      let groupId: string | undefined;
+      if (isGroup) {
+        const resolved = await resolveOrCreateGroup(accountId, groupMembers);
+        groupId = resolved.groupId;
+        log?.debug?.(
+          `[twilio:inbound] group ${resolved.isNew ? "created" : "matched"}: ${groupId} members=[${groupMembers.join(",")}]`,
+        );
+      }
+
       const peerId = groupId ?? normalizedFrom;
+
+      // Other participants (everyone in the group except the sender and our number)
+      const otherParticipants = groupMembers.filter((m) => m !== normalizedFrom);
 
       log?.info?.(
         `[twilio:inbound] dispatch ${resolvedChatType}${isGroup ? ` group=${groupId}` : ""} from ${normalizedFrom} → ${accountId}`,
@@ -267,7 +283,7 @@ export async function handleInboundMessage(
         OriginatingAccountId: accountId,
         ...(isGroup && {
           GroupId: groupId,
-          GroupParticipants: [normalizedFrom, ...otherParticipants],
+          GroupParticipants: groupMembers,
         }),
       };
 
@@ -298,10 +314,8 @@ export async function handleInboundMessage(
         log?.warn?.(`[twilio:inbound] Session record failed: ${sessionErr instanceof Error ? sessionErr.message : String(sessionErr)}`);
       }
 
-      // All group members to reply to (sender + other participants)
-      const replyRecipients = isGroup
-        ? [normalizedFrom, ...otherParticipants]
-        : [normalizedFrom];
+      // Reply to all group members (groupMembers already includes sender, excludes our number)
+      const replyRecipients = isGroup ? groupMembers : [normalizedFrom];
 
       await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: inboundCtx as any,
