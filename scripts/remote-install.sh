@@ -139,7 +139,8 @@ tar -xzv --strip-components=1 -C "$PLUGIN_DIR" -f "$_tmp_tar" 2>&1 | tail -20
 rm -f "$_tmp_tar"
 
 _file_count=$(find "$PLUGIN_DIR" -type f | wc -l | tr -d ' ')
-green "Extraction complete — $_file_count files in $PLUGIN_DIR"
+_plugin_version=$(jq -r '.version // "unknown"' "$PLUGIN_DIR/package.json" 2>/dev/null || echo "unknown")
+green "Extraction complete — $_file_count files in $PLUGIN_DIR (v${_plugin_version})"
 
 echo
 

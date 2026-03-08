@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: auto-increment beta version in package.json.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+PKG="$(git rev-parse --show-toplevel)/package.json"
+if [[ ! -f "$PKG" ]]; then exit 0; fi
+
+current=$(grep '"version"' "$PKG" | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+if [[ "$current" =~ ^([0-9]+\.[0-9]+\.[0-9]+-beta\.)([0-9]+)$ ]]; then
+  prefix="${BASH_REMATCH[1]}"
+  num="${BASH_REMATCH[2]}"
+  next="${prefix}$((num + 1))"
+  sed -i "s/\"version\": \"$current\"/\"version\": \"$next\"/" "$PKG"
+  git add "$PKG"
+  echo "[pre-commit] Version bumped: $current → $next"
+fi
