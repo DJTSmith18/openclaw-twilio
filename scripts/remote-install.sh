@@ -133,9 +133,9 @@ fi
 # ── Clone or pull ─────────────────────────────────────────────────────────────
 if [[ -d "$PLUGIN_DIR/.git" ]]; then
   cyan "Pulling latest code (branch: $BRANCH)..."
-  git -C "$PLUGIN_DIR" fetch origin
+  git -C "$PLUGIN_DIR" fetch origin "$BRANCH"
   git -C "$PLUGIN_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-  git -C "$PLUGIN_DIR" pull --ff-only origin "$BRANCH"
+  git -C "$PLUGIN_DIR" reset --hard "origin/$BRANCH"
   green "Repository updated at $PLUGIN_DIR"
 else
   cyan "Cloning $REPO_URL (branch: $BRANCH) → $PLUGIN_DIR"
