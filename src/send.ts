@@ -38,14 +38,9 @@ export async function sendConversationsMessage(params: {
     const client = twilio.default(accountSid, authToken);
 
     const createParams: Record<string, unknown> = {
+      author: author ?? account.fromNumber ?? "system",
       body: text ?? "",
     };
-    // Only set author when explicitly provided — for SMS/group MMS conversations
-    // Twilio requires author to be an actual participant; omitting it lets Twilio
-    // route the message via the proxy address automatically.
-    if (author) {
-      createParams.author = author;
-    }
 
     if (mediaUrl) {
       createParams.mediaSid = mediaUrl; // Note: Conversations API uses mediaSid, not mediaUrl

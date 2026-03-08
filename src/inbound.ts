@@ -194,6 +194,7 @@ export async function handleInboundMessage(
               log?.info(
                 `[twilio:inbound] ${conversationSid} → ${chatType} (${currentRemote.length} remote participants)`,
               );
+
             } else if (chatType === "group") {
               // Known group — detect new participants
               const cached = new Set(groupParticipants ?? []);
@@ -203,6 +204,20 @@ export async function handleInboundMessage(
                 log?.info(
                   `[twilio:inbound] New participant(s) in ${conversationSid}: ${newParticipants.join(", ")}`,
                 );
+              }
+            }
+
+            // Ensure our DID is an identity participant so we can use it as
+            // author when sending replies (required for group MMS conversations).
+            if (ourDid) {
+              const alreadyJoined = participants.some((p: any) => p.identity === ourDid);
+              if (!alreadyJoined) {
+                await client.conversations.v1
+                  .conversations(conversationSid)
+                  .participants.create({ identity: ourDid } as any)
+                  .catch((e: unknown) =>
+                    log?.debug?.(`[twilio:inbound] Could not add self as participant: ${e instanceof Error ? e.message : String(e)}`),
+                  );
               }
             }
 
