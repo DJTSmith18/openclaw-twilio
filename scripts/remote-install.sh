@@ -132,11 +132,19 @@ fi
 
 # ── Clone or pull ─────────────────────────────────────────────────────────────
 if [[ -d "$PLUGIN_DIR/.git" ]]; then
-  cyan "Pulling latest code (branch: $BRANCH)..."
-  git -C "$PLUGIN_DIR" fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
-  git -C "$PLUGIN_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-  git -C "$PLUGIN_DIR" reset --hard "origin/$BRANCH"
-  green "Repository updated at $PLUGIN_DIR"
+  CURRENT_BRANCH=$(git -C "$PLUGIN_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+    cyan "Switching branch $CURRENT_BRANCH → $BRANCH (re-cloning plugin directory)..."
+    rm -rf "$PLUGIN_DIR"
+    mkdir -p "$(dirname "$PLUGIN_DIR")"
+    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$PLUGIN_DIR"
+    green "Repository cloned to $PLUGIN_DIR (branch: $BRANCH)"
+  else
+    cyan "Pulling latest code (branch: $BRANCH)..."
+    git -C "$PLUGIN_DIR" fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+    git -C "$PLUGIN_DIR" reset --hard "origin/$BRANCH"
+    green "Repository updated at $PLUGIN_DIR"
+  fi
 else
   cyan "Cloning $REPO_URL (branch: $BRANCH) → $PLUGIN_DIR"
   mkdir -p "$(dirname "$PLUGIN_DIR")"
