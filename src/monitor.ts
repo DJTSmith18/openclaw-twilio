@@ -69,8 +69,15 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   // Parse URL-encoded bodies (Twilio sends application/x-www-form-urlencoded)
   app.use(express.urlencoded({ extended: false }));
 
-  // Parse JSON bodies for the Event Streams sink endpoint
-  app.use(streamPath, express.json({ type: ["application/json", "application/cloudevents+json"] }));
+  // Parse JSON bodies for the Event Streams sink endpoint.
+  // The verify callback captures the raw body string so we can use
+  // validateRequestWithBody for Twilio signature validation on JSON payloads.
+  app.use(streamPath, express.json({
+    type: ["application/json", "application/cloudevents+json"],
+    verify: (req: any, _res: any, buf: Buffer) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  }));
 
   // Twilio signature validation middleware
   const authToken = credentials.authToken;
@@ -80,6 +87,7 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
     try {
       const twilio = await import("twilio");
       const validateRequest = twilio.default.validateRequest;
+      const validateRequestWithBody = twilio.default.validateRequestWithBody;
 
       app.use(webhookPath, (req: any, res: any, next: any) => {
         const twilioSignature = req.headers["x-twilio-signature"] as string;
@@ -122,7 +130,9 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
         next();
       });
 
-      // Validate Event Streams sink endpoint
+      // Validate Event Streams sink endpoint.
+      // Event Streams sends JSON (not form-encoded), so we must validate
+      // against the raw body string using validateRequestWithBody.
       app.use(streamPath, (req: any, res: any, next: any) => {
         const twilioSignature = req.headers["x-twilio-signature"] as string;
         const url = `${baseUrl}${streamPath}`;
@@ -132,9 +142,11 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
           return;
         }
 
-        const isValid = validateRequest(authToken, twilioSignature, url, req.body ?? {});
+        const rawBody: string = req.rawBody ?? "";
+        const isValid = validateRequestWithBody(authToken, twilioSignature, url, rawBody);
 
         if (!isValid) {
+          console.warn("[twilio:stream] Invalid Twilio signature");
           res.status(403).send("Forbidden");
           return;
         }
