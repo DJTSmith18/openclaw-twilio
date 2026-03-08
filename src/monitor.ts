@@ -86,8 +86,13 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   if (baseUrl) {
     try {
       const twilio = await import("twilio");
+      // validateRequest is on the default export (Twilio constructor)
       const validateRequest = twilio.default.validateRequest;
-      const validateRequestWithBody = twilio.default.validateRequestWithBody;
+      // validateRequestWithBody is a named module export, not on the default export
+      const validateRequestWithBody =
+        (twilio as any).validateRequestWithBody ??
+        (twilio as any).default?.validateRequestWithBody;
+      console.log(`[twilio:webhook] validateRequestWithBody available: ${typeof validateRequestWithBody}`);
 
       app.use(webhookPath, (req: any, res: any, next: any) => {
         // app.use(path) matches sub-paths too — skip validation for sub-paths
@@ -142,17 +147,30 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
       app.use(streamPath, (req: any, res: any, next: any) => {
         const twilioSignature = req.headers["x-twilio-signature"] as string;
         const url = `${baseUrl}${streamPath}`;
+        const rawBody: string = req.rawBody ?? "";
+        const contentType = req.headers["content-type"] ?? "(none)";
+
+        console.debug(
+          `[twilio:stream] validate url=${url} sig=${twilioSignature ? twilioSignature.substring(0, 12) + "…" : "(missing)"} rawBody=${rawBody.length}b contentType=${contentType}`,
+        );
 
         if (!twilioSignature) {
+          console.warn("[twilio:stream] Missing X-Twilio-Signature header");
           res.status(403).send("Forbidden");
           return;
         }
 
-        const rawBody: string = req.rawBody ?? "";
+        if (!validateRequestWithBody) {
+          console.warn("[twilio:stream] validateRequestWithBody not available — skipping signature check");
+          return next();
+        }
+
         const isValid = validateRequestWithBody(authToken, twilioSignature, url, rawBody);
 
         if (!isValid) {
-          console.warn("[twilio:stream] Invalid Twilio signature");
+          console.warn(
+            `[twilio:stream] Invalid Twilio signature — url="${url}" rawBody=${rawBody.length}b`,
+          );
           res.status(403).send("Forbidden");
           return;
         }
@@ -185,14 +203,16 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   // Mount Event Streams sink — stores recipient list for group MMS detection
   app.post(streamPath, async (req: any, res: any) => {
     res.status(200).send("OK");
+    log.debug(`[twilio:stream] POST received — body keys: ${Object.keys(req.body ?? {}).join(", ")}`);
     try {
       const event = req.body as TwilioEventStreamEvent;
       const messageSid = event?.data?.messageSid;
       const recipients = event?.data?.recipients;
+      log.debug(`[twilio:stream] event type=${event?.type} messageSid=${messageSid} recipients=${JSON.stringify(recipients)}`);
       if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
         await storeEventStreamRecipients(messageSid, recipients);
         log.debug(
-          `[twilio:stream] ${messageSid} → ${recipients.length} recipients`,
+          `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients`,
         );
       }
     } catch (err: unknown) {
