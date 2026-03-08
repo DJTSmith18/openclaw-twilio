@@ -235,8 +235,9 @@ if [[ "$IS_UPGRADE" == true ]]; then
 
   echo
   echo "  ╔═══════════════════════════════════════════════════════╗"
-  echo "  ║   Upgrade complete!  (v${_plugin_version})$(printf '%*s' $((28 - ${#_plugin_version})) '')║"
+  echo "  ║           Upgrade complete!                           ║"
   echo "  ╚═══════════════════════════════════════════════════════╝"
+  green "  Plugin version: v${_plugin_version}"
   echo
   cyan "Current config summary:"
   if command -v jq &>/dev/null; then
