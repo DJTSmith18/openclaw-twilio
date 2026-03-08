@@ -130,7 +130,7 @@ mkdir -p "$PLUGIN_DIR"
 
 _tmp_tar=$(mktemp /tmp/openclaw-twilio-XXXXXX.tar.gz)
 cyan "Saving tarball to: $_tmp_tar"
-curl -fsSL --progress-bar "$TARBALL_URL" -o "$_tmp_tar"
+curl -fsSL --progress-bar -H "Cache-Control: no-cache" "$TARBALL_URL?_=$(date +%s)" -o "$_tmp_tar"
 _tar_size=$(du -sh "$_tmp_tar" 2>/dev/null | cut -f1)
 green "Download complete ($_tar_size)"
 
