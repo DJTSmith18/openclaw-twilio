@@ -235,7 +235,7 @@ if [[ "$IS_UPGRADE" == true ]]; then
 
   echo
   echo "  ╔═══════════════════════════════════════════════════════╗"
-  echo "  ║           Upgrade complete!                           ║"
+  echo "  ║   Upgrade complete!  (v${_plugin_version})$(printf '%*s' $((28 - ${#_plugin_version})) '')║"
   echo "  ╚═══════════════════════════════════════════════════════╝"
   echo
   cyan "Current config summary:"
