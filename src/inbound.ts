@@ -53,7 +53,7 @@ function resolveAccountByMessagingServiceSid(
   console.log(`[twilio:inbound] resolveAccountByMessagingServiceSid: looking for ${messagingServiceSid} among [${accountIds.join(", ")}]`);
   for (const id of accountIds) {
     const account = resolveTwilioAccount({ cfg, accountId: id });
-    console.log(`[twilio:inbound]   account=${id} messagingServiceSid=${account.messagingServiceSid ?? "(none)"} fromNumber=${account.fromNumber}`);
+    console.log(`[twilio:inbound]   input=${id} resolvedId=${account.accountId} messagingServiceSid=${account.messagingServiceSid ?? "(none)"} fromNumber=${account.fromNumber}`);
     if (account.messagingServiceSid === messagingServiceSid) {
       return account;
     }

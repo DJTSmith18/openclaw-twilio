@@ -54,12 +54,18 @@ export function resolveTwilioAccount(params: {
   accountId?: string | null;
 }): ResolvedTwilioAccount {
   const section = getTwilioSection(params.cfg);
-  const accountId = normalizeAccountId(params.accountId ?? undefined) ?? DEFAULT_ACCOUNT_ID;
+  const rawAccountId = params.accountId ?? undefined;
+  const accountId = normalizeAccountId(rawAccountId) ?? DEFAULT_ACCOUNT_ID;
 
-  // Get account-specific overrides (if any)
+  // Get account-specific overrides (if any).
+  // Try normalized key first, then raw key (normalizeAccountId may strip/alter
+  // characters like '+' that appear in E.164 config keys).
   const accountCfg: TwilioAccountConfig =
     (accountId !== DEFAULT_ACCOUNT_ID
-      ? section?.accounts?.[accountId]
+      ? (section?.accounts?.[accountId] ??
+          (rawAccountId && rawAccountId !== accountId
+            ? section?.accounts?.[rawAccountId]
+            : undefined))
       : section?.accounts?.[DEFAULT_ACCOUNT_ID]) ?? {};
 
   // Merge: account-specific overrides top-level defaults
