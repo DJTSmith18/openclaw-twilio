@@ -311,6 +311,25 @@ function jaccardSimilarity(a: string[], b: string[]): number {
  * @param accountId  The Twilio account / DID identifier
  * @param participants  Sorted E.164 array — our Twilio number already excluded
  */
+/**
+ * Look up the participant list for an existing group by its UUID.
+ * Returns null if the group is not found.
+ */
+export async function getGroupMembers(
+  groupId: string,
+): Promise<string[] | null> {
+  const row = await dbGet<{ participants: string }>(
+    "SELECT participants FROM twilio_groups WHERE group_id = ?;",
+    [groupId],
+  );
+  if (!row) return null;
+  try {
+    return JSON.parse(row.participants) as string[];
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveOrCreateGroup(
   accountId: string,
   participants: string[],
