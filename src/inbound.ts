@@ -136,14 +136,18 @@ export async function handleInboundMessage(
 
       const cachedConv = await getConversationBySid(conversationSid);
 
+      let newParticipants: string[] = []; // phones added since last cached state
+
       if (cachedConv) {
         chatType = cachedConv.chatType;
         groupParticipants = cachedConv.participants;
-        log?.debug?.(
-          `[twilio:inbound] DB cache hit: ${conversationSid} → ${chatType}`,
-        );
-      } else {
-        // First time seeing this conversation — query Twilio participants
+        log?.debug?.(`[twilio:inbound] DB cache hit: ${conversationSid} → ${chatType}`);
+      }
+
+      // Always query participants for group conversations so we can detect
+      // new members joining. For new conversations, query to classify.
+      const shouldQueryParticipants = !cachedConv || chatType === "group";
+      if (shouldQueryParticipants) {
         const credentials = resolveTwilioCredentials(section);
         if (credentials) {
           try {
@@ -154,25 +158,43 @@ export async function handleInboundMessage(
               .conversations(conversationSid)
               .participants.list();
 
-            // SMS participants have a messagingBinding.address (their phone number)
-            const smsParticipants = participants.filter(
-              (p: any) => p.messagingBinding?.address,
-            );
-
-            // Exclude our own DID; count remote parties
             const ourNormalized = normalizeE164(ourDid);
-            const remotePhones = smsParticipants
+            const currentRemote = participants
+              .filter((p: any) => p.messagingBinding?.address)
               .map((p: any) => normalizeE164(p.messagingBinding?.address ?? "") ?? "")
               .filter((p) => p && p !== ourNormalized)
               .sort();
 
-            if (remotePhones.length >= 2) {
-              chatType = "group";
-              groupParticipants = remotePhones;
+            if (!cachedConv) {
+              // First encounter — classify and cache
+              if (currentRemote.length >= 2) {
+                chatType = "group";
+                groupParticipants = currentRemote;
+              }
+              log?.info(
+                `[twilio:inbound] ${conversationSid} → ${chatType} (${currentRemote.length} remote participants)`,
+              );
+            } else if (chatType === "group") {
+              // Known group — detect new participants
+              const cached = new Set(groupParticipants ?? []);
+              newParticipants = currentRemote.filter((p) => !cached.has(p));
+              if (newParticipants.length > 0) {
+                groupParticipants = currentRemote;
+                log?.info(
+                  `[twilio:inbound] New participant(s) in ${conversationSid}: ${newParticipants.join(", ")}`,
+                );
+              }
             }
 
-            log?.info(
-              `[twilio:inbound] ${conversationSid} → ${chatType} (${remotePhones.length} remote participants)`,
+            // Update DB cache
+            await upsertConversationMap({
+              conversationSid,
+              accountId,
+              chatType,
+              peerId: chatType === "direct" ? normalizedFrom : undefined,
+              participants: groupParticipants,
+            }).catch((err) =>
+              log?.warn?.(`[twilio:inbound] DB upsert failed: ${err instanceof Error ? err.message : String(err)}`),
             );
           } catch (apiErr) {
             log?.warn(
@@ -180,17 +202,6 @@ export async function handleInboundMessage(
             );
           }
         }
-
-        // Cache result (even if API call failed — defaults to direct)
-        await upsertConversationMap({
-          conversationSid,
-          accountId,
-          chatType,
-          peerId: chatType === "direct" ? normalizedFrom : undefined,
-          participants: groupParticipants,
-        }).catch((err) =>
-          log?.warn?.(`[twilio:inbound] DB upsert failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
       }
 
       log?.info(
@@ -279,13 +290,15 @@ export async function handleInboundMessage(
         const senderLabel = (contactInfo as any)?.name
           ? `${(contactInfo as any).name} (${normalizedFrom})`
           : normalizedFrom;
-        const participantList = (groupParticipants ?? []).join(", ") || "unknown";
-        agentMessageBody =
-          `***THIS IS A GROUP CONVERSATION, NOT PRIVATE***\n` +
-          `Sender: ${senderLabel}\n` +
-          `All participants: ${participantList}\n` +
-          `---\n` +
-          messageText;
+        const lines = [
+          `***THIS IS A GROUP CONVERSATION, NOT PRIVATE***`,
+          `Sender: ${senderLabel}`,
+        ];
+        if (newParticipants.length > 0) {
+          lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
+        }
+        lines.push(`---`, messageText);
+        agentMessageBody = lines.join("\n");
       }
 
       // ── Media ────────────────────────────────────────────────────────
