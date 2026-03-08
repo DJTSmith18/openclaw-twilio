@@ -125,10 +125,21 @@ fi
 
 # ── Download plugin (curl tarball — no git required) ─────────────────────────
 TARBALL_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.tar.gz"
-cyan "Downloading plugin (branch: $BRANCH)..."
+cyan "Downloading plugin from: $TARBALL_URL"
 mkdir -p "$PLUGIN_DIR"
-curl -fsSL "$TARBALL_URL" | tar -xz --strip-components=1 -C "$PLUGIN_DIR"
-green "Plugin files extracted to $PLUGIN_DIR"
+
+_tmp_tar=$(mktemp /tmp/openclaw-twilio-XXXXXX.tar.gz)
+cyan "Saving tarball to: $_tmp_tar"
+curl -fsSL --progress-bar "$TARBALL_URL" -o "$_tmp_tar"
+_tar_size=$(du -sh "$_tmp_tar" 2>/dev/null | cut -f1)
+green "Download complete ($_tar_size)"
+
+cyan "Extracting to: $PLUGIN_DIR"
+tar -xzv --strip-components=1 -C "$PLUGIN_DIR" -f "$_tmp_tar" 2>&1 | tail -20
+rm -f "$_tmp_tar"
+
+_file_count=$(find "$PLUGIN_DIR" -type f | wc -l | tr -d ' ')
+green "Extraction complete — $_file_count files in $PLUGIN_DIR"
 
 echo
 
