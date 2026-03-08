@@ -65,19 +65,27 @@ Add it to your `openclaw.json` under the phone number:
 
 ### What to do with all the other Messaging Service settings
 
-**Integration tab — you must pick one option.** Twilio requires a selection.
-The options are radio buttons: Send a Webhook, Defer to Sender's URL, Send to
-Studio Flow, Autocreate a Conversation.
+**Integration tab — select "Send a Webhook"** and enter your webhook URL:
+`https://your-domain.example.com/sms2`
 
-- If **"Autocreate a Conversation"** is selectable — pick it. It links the
-  Messaging Service to the Conversations API and complements the plugin's
-  Address Configuration.
-- If it is **greyed out** — select **"Send a Webhook"** instead and enter your
-  full webhook URL: `https://your-domain.example.com/sms2`
-  (the same URL you put in `baseUrl` + `path`). This acts as a fallback — once
-  the plugin registers Address Configuration on startup, Conversations intercepts
-  inbound messages before this webhook fires, so it will effectively never be
-  called. Twilio just requires something to be set.
+Do NOT worry about "Autocreate a Conversation" — greyed out or not, it does
+not matter for this plugin. Here is why:
+
+Twilio has two separate mechanisms for routing inbound SMS into Conversations:
+1. **Messaging Service → "Autocreate a Conversation"** — a Messaging Service
+   level toggle
+2. **Address Configuration** — a per-phone-number binding registered directly
+   in the Conversations API
+
+The plugin uses **Address Configuration** (option 2). On every startup it calls
+the Twilio API to register your phone number with `autoCreation.enabled: true`
+and your webhook URL. This is a lower-level, more direct binding that takes
+priority over the Messaging Service toggle. The Messaging Service autocreate
+setting is irrelevant once Address Configuration exists.
+
+Select "Send a Webhook" + your URL to satisfy Twilio's requirement to have
+something selected. It will never actually fire because Address Configuration
+intercepts inbound traffic first.
 
 Everything else on the Messaging Service page:
 
