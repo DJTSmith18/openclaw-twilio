@@ -69,7 +69,7 @@ async function setupAddressConfiguration(params: {
       createParams["autoCreation.conversationServiceSid"] = conversationServiceSid;
     }
 
-    await client.conversations.v1.configuration.addresses.create(createParams as any);
+    await client.conversations.v1.addressConfigurations.create(createParams as any);
     log.info(
       `[twilio:gateway] Address configuration created for ${fromNumber} → ${webhookUrl}`,
     );
