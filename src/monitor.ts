@@ -70,10 +70,11 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   app.use(express.urlencoded({ extended: false }));
 
   // Parse JSON bodies for the Event Streams sink endpoint.
-  // The verify callback captures the raw body string so we can use
-  // validateRequestWithBody for Twilio signature validation on JSON payloads.
+  // Accept any content-type since Twilio Event Streams may send an unexpected
+  // Content-Type header. The verify callback captures the raw body string for
+  // both signature validation and manual fallback parsing.
   app.use(streamPath, express.json({
-    type: ["application/json", "application/cloudevents+json"],
+    type: "*/*",
     verify: (req: any, _res: any, buf: Buffer) => {
       req.rawBody = buf.toString("utf8");
     },
@@ -189,7 +190,15 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
   app.post(streamPath, async (req: any, res: any) => {
     res.status(200).send("OK");
     try {
-      const event = req.body as TwilioEventStreamEvent;
+      // Fall back to parsing rawBody if express.json() didn't parse (content-type mismatch)
+      const parsedBody =
+        req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
+          ? req.body
+          : (() => {
+              try { return JSON.parse(req.rawBody ?? "{}"); } catch { return {}; }
+            })();
+      log.info(`[twilio:stream] rawBody=${req.rawBody?.length ?? 0}b bodyParsed=${Object.keys(req.body ?? {}).length > 0} contentType="${req.headers["content-type"] ?? "none"}"`);
+      const event = parsedBody as TwilioEventStreamEvent;
       const messageSid = event?.data?.messageSid;
       const recipients = event?.data?.recipients;
       log.info(
