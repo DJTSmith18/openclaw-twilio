@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/twilio",
-  "version": "1.0.0-beta.21",
+  "version": "1.1.0",
   "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
   "description": "OpenClaw Twilio channel plugin (SMS/MMS/RCS/Group)",
   "type": "module",
