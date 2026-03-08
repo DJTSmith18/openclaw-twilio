@@ -55,9 +55,17 @@ export async function sendConversationsMessage(params: {
       `[twilio:send] conversations message to=${conversationSid} body="${(text ?? "").slice(0, 60)}"`,
     );
 
-    const message = await client.conversations.v1
-      .conversations(conversationSid)
-      .messages.create(createParams as any);
+    const section = getTwilioSection(cfg);
+    const conversationServiceSid = section?.shared?.conversationServiceSid ?? section?.conversationServiceSid;
+
+    const message = await (conversationServiceSid
+      ? client.conversations.v1
+          .services(conversationServiceSid)
+          .conversations(conversationSid)
+          .messages.create(createParams as any)
+      : client.conversations.v1
+          .conversations(conversationSid)
+          .messages.create(createParams as any));
 
     console.log(
       `[twilio:send] sent sid=${message.sid} conversation=${conversationSid}`,

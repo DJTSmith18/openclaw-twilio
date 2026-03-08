@@ -10,6 +10,11 @@ import { upsertConversationMap, getConversationBySid } from "./db.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
+// In-memory dedup set for onMessageAdded — prevents double-processing when
+// both Address Configuration and Conversation Service webhooks fire for the same message.
+const processedMessageSids = new Set<string>();
+const DEDUP_MAX = 500;
+
 type InboundDeps = {
   cfg: OpenClawConfig;
   log?: {
@@ -93,6 +98,21 @@ export async function handleInboundMessage(
   const messageText = body.Body ?? "";
   const author = body.Author ?? "";
   const messagingServiceSid = body.MessagingServiceSid ?? "";
+
+  // Deduplicate: Twilio may fire onMessageAdded from both Address Configuration
+  // and Conversation Service webhooks for the same message.
+  if (messageSid && processedMessageSids.has(messageSid)) {
+    log?.debug?.(`[twilio:inbound] duplicate onMessageAdded for ${messageSid}, ignoring`);
+    res.status(200).send("OK");
+    return;
+  }
+  if (messageSid) {
+    if (processedMessageSids.size >= DEDUP_MAX) {
+      const first = processedMessageSids.values().next().value;
+      if (first) processedMessageSids.delete(first);
+    }
+    processedMessageSids.add(messageSid);
+  }
 
   if (!conversationSid || !author) {
     log?.warn("[twilio:inbound] Missing ConversationSid or Author");
