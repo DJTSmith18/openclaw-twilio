@@ -199,10 +199,10 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
             })();
       log.info(`[twilio:stream] rawBody=${req.rawBody?.length ?? 0}b bodyParsed=${Object.keys(req.body ?? {}).length > 0} contentType="${req.headers["content-type"] ?? "none"}"`);
       const event = parsedBody as TwilioEventStreamEvent;
-      const messageSid = event?.data?.messageSid;
-      const recipients = event?.data?.recipients;
+      const messageSid = event?.messageSid;
+      const recipients = event?.recipients;
       log.info(
-        `[twilio:stream] received type=${event?.type ?? "(unknown)"} messageSid=${messageSid ?? "(none)"} recipients=${JSON.stringify(recipients ?? null)}`,
+        `[twilio:stream] received eventName=${event?.eventName ?? "(unknown)"} messageSid=${messageSid ?? "(none)"} recipients=${JSON.stringify(recipients ?? null)}`,
       );
       if (messageSid && Array.isArray(recipients) && recipients.length > 0) {
         await storeEventStreamRecipients(messageSid, recipients);
@@ -210,7 +210,7 @@ async function _startServer(opts: MonitorTwilioOpts): Promise<void> {
           `[twilio:stream] stored ${messageSid} → ${recipients.length} recipients: ${recipients.join(", ")}`,
         );
       } else if (messageSid) {
-        log.info(`[twilio:stream] ${messageSid} — no recipients array (1:1 message or wrong schema version)`);
+        log.info(`[twilio:stream] ${messageSid} — no recipients (1:1 message)`);
       }
     } catch (err: unknown) {
       log.warn(

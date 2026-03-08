@@ -117,25 +117,31 @@ export type SendTwilioMessageResult = {
 };
 
 /**
- * Twilio Event Streams inbound message event (CloudEvents schema v5).
- * Fired alongside the regular webhook for every inbound message.
- * The `data.recipients` array contains all group MMS participants.
+ * Twilio Event Streams inbound message event (Messaging.InboundMessageV1/5).
+ * Fields are flat at the root — no CloudEvents data envelope.
+ * The `recipients` array contains all group MMS participants (group messages only).
  */
 export type TwilioEventStreamEvent = {
-  specversion: string;
-  type: string;
-  source: string;
-  id: string;
-  dataschema?: string;
-  data: {
-    messageSid: string;
-    accountSid?: string;
-    from: string;
-    to: string;
-    body?: string;
-    numMedia?: number;
-    recipients?: string[];
-  };
+  messageSid: string;
+  timestamp: string;
+  accountSid: string;
+  eventName: string;
+  from: string;
+  to: string;
+  body?: string;
+  numMedia?: number;
+  numSegments?: number;
+  recipients?: string[];
+  messagingServiceSid?: string;
+  optOutType?: string;
+  fromCity?: string;
+  fromState?: string;
+  fromZip?: string;
+  fromCountry?: string;
+  toCity?: string;
+  toState?: string;
+  toZip?: string;
+  toCountry?: string;
 };
 
 export type MonitorTwilioOpts = {
