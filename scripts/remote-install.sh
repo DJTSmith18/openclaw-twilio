@@ -152,13 +152,41 @@ export PLUGIN_DIR
 # ── Upgrade path: update deps only, preserve all config ──────────────────────
 if [[ "$IS_UPGRADE" == true ]]; then
   bold "Existing install detected — upgrading dependencies only."
-  cyan "Existing config will not be modified."
   echo
 
   if [[ -f "$PLUGIN_DIR/package.json" ]]; then
     cyan "Running npm install..."
     npm install --omit=dev --prefix "$PLUGIN_DIR" 2>&1 | tail -5 || true
     green "Dependencies updated"
+  fi
+
+  echo
+
+  # ── Config migration: strip top-level policy fields from multi-DID installs ─
+  # Older installs wrote dmPolicy/allowFrom/groupPolicy at the top level AND
+  # inside each account, causing "openclaw doctor" to misidentify the setup
+  # as single-account. Safe to remove — the values live in each account entry.
+  if command -v jq &>/dev/null && [[ -f "$CONFIG_FILE" ]]; then
+    _has_accounts=$(jq -r '
+      .channels.twilio.accounts | keys | length
+    ' "$CONFIG_FILE" 2>/dev/null || echo "0")
+
+    _has_toplevel_policy=$(jq -r '
+      .channels.twilio | has("dmPolicy") or has("allowFrom") or has("groupPolicy")
+    ' "$CONFIG_FILE" 2>/dev/null || echo "false")
+
+    if [[ "$_has_accounts" -gt 0 && "$_has_toplevel_policy" == "true" ]]; then
+      cyan "Migrating config: removing top-level policy fields from multi-DID setup..."
+      _backup="${CONFIG_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+      cp "$CONFIG_FILE" "$_backup"
+      _tmp=$(mktemp)
+      jq 'del(.channels.twilio.dmPolicy, .channels.twilio.allowFrom, .channels.twilio.groupPolicy)' \
+        "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
+      green "Config migrated (backup: $_backup)"
+      yellow "Restart OpenClaw to apply: openclaw restart"
+    else
+      cyan "Config is up to date — no migration needed."
+    fi
   fi
 
   echo
@@ -173,8 +201,7 @@ if [[ "$IS_UPGRADE" == true ]]; then
       "  Account SID:   " + (.accountSid[0:8] // "?") + "...",
       "  Webhook port:  " + (.webhook.port // "?" | tostring),
       "  Webhook path:  " + (.webhook.path // "?"),
-      "  DB path:       " + (.dbPath // "?"),
-      "  DM policy:     " + (.dmPolicy // "?")
+      "  DB path:       " + (.dbPath // "?")
     ' "$CONFIG_FILE" 2>/dev/null || true
     echo
     jq -r '
