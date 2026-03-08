@@ -9,6 +9,7 @@ type SendParams = {
   text?: string;
   mediaUrl?: string;
   accountId?: string | null;
+  sendAsMms?: boolean;
 };
 
 function getTwilioSection(cfg: unknown): TwilioConfig | undefined {
@@ -24,7 +25,7 @@ function getTwilioSection(cfg: unknown): TwilioConfig | undefined {
 export async function sendTwilioMessage(
   params: SendParams,
 ): Promise<SendTwilioMessageResult> {
-  const { cfg, to, text, mediaUrl, accountId } = params;
+  const { cfg, to, text, mediaUrl, accountId, sendAsMms } = params;
   const ocCfg = cfg as OpenClawConfig;
 
   const account = resolveTwilioAccount({ cfg: ocCfg, accountId });
@@ -63,6 +64,11 @@ export async function sendTwilioMessage(
     // MMS: include media
     if (mediaUrl) {
       createParams.mediaUrl = [mediaUrl];
+    }
+
+    // Force MMS delivery (group messages need MMS for proper threading)
+    if (sendAsMms) {
+      createParams.sendAsMms = true;
     }
 
     // Status callback
@@ -115,6 +121,7 @@ export async function sendTwilioGroupMessage(
     const result = await sendTwilioMessage({
       ...params,
       to: recipient,
+      sendAsMms: true,
     });
     results.push(result);
   }
