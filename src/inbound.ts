@@ -285,25 +285,28 @@ export async function handleInboundMessage(
       // understands this is not a private 1:1 exchange. Each participant's
       // message arrives separately — the agent needs context to know who
       // is speaking and that others are in the thread.
-      let agentMessageBody = messageText;
-      if (chatType === "group") {
-        const lines = [
-          `***THIS IS A GROUP CONVERSATION, NOT PRIVATE***`,
-          `Sender: ${normalizedFrom}`,
-        ];
-        if (contactInfo && typeof contactInfo === "object") {
-          for (const [key, val] of Object.entries(contactInfo)) {
-            if (val !== null && val !== undefined && val !== "") {
-              lines.push(`  ${key}: ${val}`);
-            }
+      // ── Build sender block (shared by both direct and group) ────────
+      const senderLines = [`Sender: ${normalizedFrom}`];
+      if (contactInfo && typeof contactInfo === "object") {
+        for (const [key, val] of Object.entries(contactInfo)) {
+          if (val !== null && val !== undefined && val !== "") {
+            senderLines.push(`  ${key}: ${val}`);
           }
         }
-        if (newParticipants.length > 0) {
-          lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
-        }
-        lines.push(`---`, messageText);
-        agentMessageBody = lines.join("\n");
+      } else {
+        senderLines.push(`  (not in contacts)`);
       }
+
+      const lines =
+        chatType === "group"
+          ? [`***THIS IS A GROUP CONVERSATION, NOT PRIVATE***`, ...senderLines]
+          : [`**THIS CONVERSATION IS PRIVATE**`, ...senderLines];
+
+      if (chatType === "group" && newParticipants.length > 0) {
+        lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
+      }
+      lines.push(`---`, messageText);
+      const agentMessageBody = lines.join("\n");
 
       // ── Media ────────────────────────────────────────────────────────
       const media = extractMedia(body);
