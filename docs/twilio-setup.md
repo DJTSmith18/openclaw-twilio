@@ -65,18 +65,27 @@ Add it to your `openclaw.json` under the phone number:
 
 ### What to do with all the other Messaging Service settings
 
-The Messaging Service has many tabs and options. Here is what matters vs. what
-to ignore for this setup:
+**Integration tab — you must pick one option.** Twilio requires a selection.
+The options are radio buttons: Send a Webhook, Defer to Sender's URL, Send to
+Studio Flow, Autocreate a Conversation.
+
+- If **"Autocreate a Conversation"** is selectable — pick it. It links the
+  Messaging Service to the Conversations API and complements the plugin's
+  Address Configuration.
+- If it is **greyed out** — select **"Send a Webhook"** instead and enter your
+  full webhook URL: `https://your-domain.example.com/sms2`
+  (the same URL you put in `baseUrl` + `path`). This acts as a fallback — once
+  the plugin registers Address Configuration on startup, Conversations intercepts
+  inbound messages before this webhook fires, so it will effectively never be
+  called. Twilio just requires something to be set.
+
+Everything else on the Messaging Service page:
 
 | Setting | What to do |
 |---|---|
 | **Properties → SID** | Copy this — it's the `MG...` you need |
 | **Sender Pool** | Skip — you will assign the number from the phone number page (Step 3) |
-| **Integration → "Autocreate a Conversation"** | **Ignore / leave it.** This toggle is greyed out for many accounts and it does not matter. The plugin handles conversation auto-creation via Address Configuration — a separate Twilio mechanism that does the same thing and takes priority. You do not need to enable this toggle. |
-| **Integration → Webhook / Studio Flow** | Skip — the plugin registers its own webhook via Address Configuration |
 | **Features (Sticky Sender, Smart Encoding, etc.)** | Leave defaults — none of these affect the plugin |
-
-**Bottom line: the only thing you need from the Messaging Service page is the `MG...` SID.**
 
 ---
 
