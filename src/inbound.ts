@@ -205,14 +205,16 @@ export async function handleInboundMessage(
   // Respond immediately with empty TwiML so Twilio doesn't time out
   res.status(200).type("text/xml").send("<Response></Response>");
 
-  // Process asynchronously — wait up to 500ms for Event Streams recipients
+  // Process asynchronously — Twilio already has its 200 response, so we can
+  // wait as long as needed for Event Streams without any webhook timeout risk.
   void (async () => {
     try {
       const ourNumber = normalizedTo ?? to;
 
       // Poll for Event Streams data (group participant list).
-      // Event Streams typically arrives ~2s after the inbound webhook.
-      const streamRecipients = await pollForRecipients(messageSid, 3000);
+      // Event Streams typically arrives ~2s after the inbound webhook but can
+      // take longer. 30s is safe since the HTTP response was already sent.
+      const streamRecipients = await pollForRecipients(messageSid, 30_000);
       await deleteEventStreamRecipients(messageSid).catch(() => {});
 
       // Group detection: presence of a non-empty recipients array signals group MMS.
