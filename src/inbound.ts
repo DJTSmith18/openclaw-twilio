@@ -66,6 +66,9 @@ export async function handleInboundMessage(
   const body = req.body as TwilioConversationsWebhookPayload;
   const { cfg, log } = deps;
 
+  // Dump raw payload for debugging
+  log?.info(`[twilio:inbound] RAW PAYLOAD: ${JSON.stringify(req.body)}`);
+
   // Only handle message events
   const eventType = body.EventType;
   if (eventType !== "onMessageAdded") {
