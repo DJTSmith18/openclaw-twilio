@@ -214,16 +214,21 @@ export async function handleInboundMessage(
       const streamRecipients = await pollForRecipients(messageSid, 500);
       await deleteEventStreamRecipients(messageSid).catch(() => {});
 
-      // All participants except our own Twilio number (sender stays in).
-      // Sorted for stable comparison in the group registry.
-      const groupMembers: string[] = streamRecipients
-        ? streamRecipients
-            .map((r) => normalizeE164(r) ?? r)
-            .filter((r) => r !== normalizeE164(ourNumber))
-            .sort()
-        : [];
+      // Group detection: presence of a non-empty recipients array signals group MMS.
+      // recipients contains the other participants (not sender, not our DID).
+      // We rebuild the full member set by adding the sender back in.
+      const isGroup = Array.isArray(streamRecipients) && streamRecipients.length > 0;
 
-      const isGroup = groupMembers.length > 1; // more than just the sender
+      // Full participant set: sender + stream recipients, excluding our own number, sorted.
+      const groupMembers: string[] = isGroup
+        ? [
+            ...new Set(
+              [normalizedFrom, ...streamRecipients!.map((r) => normalizeE164(r) ?? r)].filter(
+                (r) => r !== normalizeE164(ourNumber),
+              ),
+            ),
+          ].sort()
+        : [];
       const resolvedChatType: "direct" | "group" = isGroup ? "group" : "direct";
 
       // Stable UUID-based group ID — resolved from DB via Jaccard matching so
