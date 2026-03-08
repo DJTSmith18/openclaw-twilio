@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { TwilioConversationsWebhookPayload } from "./types.js";
-import { resolveTwilioAccountByDid, resolveTwilioAccount } from "./accounts.js";
+import { resolveTwilioAccount, listTwilioAccountIds } from "./accounts.js";
 import { resolveTwilioCredentials } from "./credentials.js";
 import { normalizeE164 } from "./normalize.js";
 import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
@@ -19,10 +19,6 @@ type InboundDeps = {
   };
 };
 
-/**
- * Extract media attachments from a Conversations webhook payload.
- * NumMedia is present for MMS messages.
- */
 function extractMedia(
   body: TwilioConversationsWebhookPayload,
 ): Array<{ url: string; contentType: string }> {
@@ -39,24 +35,40 @@ function extractMedia(
 }
 
 /**
+ * Resolve account by matching MessagingServiceSid from the webhook payload
+ * against configured accounts. No API call required.
+ */
+function resolveAccountByMessagingServiceSid(
+  cfg: OpenClawConfig,
+  messagingServiceSid: string,
+): ReturnType<typeof resolveTwilioAccount> | null {
+  if (!messagingServiceSid) return null;
+
+  const accountIds = listTwilioAccountIds(cfg);
+  for (const id of accountIds) {
+    const account = resolveTwilioAccount({ cfg, accountId: id });
+    if (account.messagingServiceSid === messagingServiceSid) {
+      return account;
+    }
+  }
+  return null;
+}
+
+/**
  * Handle an inbound Twilio Conversations webhook (onMessageAdded).
  *
- * Flow:
- * 1. Parse Conversations webhook payload
- * 2. Ignore non-onMessageAdded events
- * 3. Respond 200 immediately
- * 4. Async: resolve account + conversation type via participants list
- *    - DB cache hit → skip API call for known conversations
- *    - Cache miss → query Twilio participants.list():
- *        • find our DID (MessagingBinding.ProxyAddress) → resolve account
- *        • count SMS participants → direct (1) vs group (≥2)
- * 5. Apply access control
- * 6. Upsert conversation reference + log inbound
- * 7. Build context, record session, dispatch reply
+ * Account resolution: MessagingServiceSid in payload → matched against config
+ *   (no API call required).
  *
- * Note: MessagingBinding.ProxyAddress is NOT present in the onMessageAdded
- * webhook body — it only exists on the participant resource. Account resolution
- * must come from the participants list or DB cache.
+ * Conversation classification:
+ *   - DB cache hit → use cached chatType + participants
+ *   - Cache miss → participants.list() → count SMS participants
+ *     1 remote = direct, 2+ remote = group
+ *   - Result cached in twilio_conversation_map for subsequent messages
+ *
+ * Group context: agent message prefixed with group warning so agent knows
+ *   this is not a private 1:1 conversation. Full participant roster included
+ *   in context for auditing.
  */
 export async function handleInboundMessage(
   req: Request,
@@ -66,10 +78,9 @@ export async function handleInboundMessage(
   const body = req.body as TwilioConversationsWebhookPayload;
   const { cfg, log } = deps;
 
-  // Dump raw payload for debugging
-  log?.info(`[twilio:inbound] RAW PAYLOAD: ${JSON.stringify(req.body)}`);
+  log?.debug?.(`[twilio:inbound] RAW PAYLOAD: ${JSON.stringify(req.body)}`);
 
-  // Only handle message events
+  // Only handle Conversations message events
   const eventType = body.EventType;
   if (eventType !== "onMessageAdded") {
     log?.debug?.(`[twilio:inbound] ignoring event: ${eventType}`);
@@ -81,168 +92,139 @@ export async function handleInboundMessage(
   const messageSid = body.MessageSid;
   const messageText = body.Body ?? "";
   const author = body.Author ?? "";
+  const messagingServiceSid = body.MessagingServiceSid ?? "";
 
   if (!conversationSid || !author) {
-    log?.warn("[twilio:inbound] Missing ConversationSid or Author in webhook body");
+    log?.warn("[twilio:inbound] Missing ConversationSid or Author");
     res.status(400).send("Bad Request");
     return;
   }
 
   const normalizedFrom = normalizeE164(author);
   if (!normalizedFrom) {
-    // SDK identity participant (e.g. agent replying via SDK) — not an inbound SMS
+    // System/SDK participant — not an inbound SMS from a real phone
     log?.debug?.(`[twilio:inbound] ignoring non-E.164 author: ${author}`);
     res.status(200).send("OK");
     return;
   }
 
-  // Respond immediately — Conversations API has no timeout risk
+  // Respond immediately — no timeout risk with Conversations API
   res.status(200).send("OK");
 
-  // All processing is async from here — the HTTP response is already sent
   void (async () => {
     try {
       const ocCfg = cfg as OpenClawConfig;
       const section = (cfg as any)?.channels?.twilio as TwilioConfig | undefined;
 
-      // ── Resolve account + conversation type ───────────────────────────
-      // MessagingBinding.ProxyAddress is NOT in the webhook body — it only
-      // exists on the participant resource. We get it from the DB cache or
-      // from participants.list(), which we query anyway for conversation
-      // classification. One API call serves both purposes.
+      // ── Resolve account via MessagingServiceSid (no API call) ────────
+      let account = resolveAccountByMessagingServiceSid(ocCfg, messagingServiceSid);
 
-      let account: ReturnType<typeof resolveTwilioAccountByDid> | null = null;
-      let proxyAddress = "";
+      if (!account) {
+        // Fallback: use default account (single-DID setups without messagingServiceSid configured)
+        log?.warn(
+          `[twilio:inbound] No account matched MessagingServiceSid ${messagingServiceSid} — using default`,
+        );
+        account = resolveTwilioAccount({ cfg: ocCfg, accountId: null });
+      }
+
+      const accountId = account.accountId;
+      const ourDid = account.fromNumber ?? "";
+
+      // ── Resolve conversation type (DB cache or participants API) ──────
       let chatType: "direct" | "group" = "direct";
       let groupParticipants: string[] | undefined;
 
       const cachedConv = await getConversationBySid(conversationSid);
 
       if (cachedConv) {
-        // Known conversation — resolve account from cached accountId
-        account = resolveTwilioAccount({ cfg: ocCfg, accountId: cachedConv.accountId });
-        proxyAddress = account.fromNumber ?? "";
         chatType = cachedConv.chatType;
         groupParticipants = cachedConv.participants;
-
         log?.debug?.(
-          `[twilio:inbound] DB cache hit: conversation=${conversationSid} type=${chatType} account=${cachedConv.accountId}`,
+          `[twilio:inbound] DB cache hit: ${conversationSid} → ${chatType}`,
         );
       } else {
-        // New conversation — query Twilio for participants to get proxy address + classify
+        // First time seeing this conversation — query Twilio participants
         const credentials = resolveTwilioCredentials(section);
-        if (!credentials) {
-          log?.warn("[twilio:inbound] No Twilio credentials configured");
-          return;
-        }
+        if (credentials) {
+          try {
+            const twilio = await import("twilio");
+            const client = twilio.default(credentials.accountSid, credentials.authToken);
 
-        try {
-          const twilio = await import("twilio");
-          const client = twilio.default(credentials.accountSid, credentials.authToken);
+            const participants = await client.conversations.v1
+              .conversations(conversationSid)
+              .participants.list();
 
-          const participants = await client.conversations.v1
-            .conversations(conversationSid)
-            .participants.list();
-
-          // SMS participants have a messagingBinding with address/proxyAddress
-          const smsParticipants = participants.filter(
-            (p: any) => p.messagingBinding?.address,
-          );
-
-          // Find which SMS participant's proxyAddress matches one of our configured DIDs
-          for (const p of smsParticipants) {
-            const proxy: string = p.messagingBinding?.proxyAddress ?? "";
-            if (!proxy) continue;
-            const candidate = resolveTwilioAccountByDid(ocCfg, proxy);
-            if (candidate) {
-              account = candidate;
-              proxyAddress = proxy;
-              break;
-            }
-          }
-
-          if (!account) {
-            log?.warn(
-              `[twilio:inbound] No configured DID matched any participant proxy address for ${conversationSid}`,
+            // SMS participants have a messagingBinding.address (their phone number)
+            const smsParticipants = participants.filter(
+              (p: any) => p.messagingBinding?.address,
             );
-            return;
+
+            // Exclude our own DID; count remote parties
+            const ourNormalized = normalizeE164(ourDid);
+            const remotePhones = smsParticipants
+              .map((p: any) => normalizeE164(p.messagingBinding?.address ?? "") ?? "")
+              .filter((p) => p && p !== ourNormalized)
+              .sort();
+
+            if (remotePhones.length >= 2) {
+              chatType = "group";
+              groupParticipants = remotePhones;
+            }
+
+            log?.info(
+              `[twilio:inbound] ${conversationSid} → ${chatType} (${remotePhones.length} remote participants)`,
+            );
+          } catch (apiErr) {
+            log?.warn(
+              `[twilio:inbound] participants.list() failed for ${conversationSid}: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`,
+            );
           }
-
-          // Classify: count SMS participants excluding our own DID
-          const ourNormalized = normalizeE164(proxyAddress);
-          const remoteParticipants = smsParticipants
-            .map((p: any) => normalizeE164(p.messagingBinding?.address ?? "") ?? "")
-            .filter((p) => p && p !== ourNormalized)
-            .sort();
-
-          if (remoteParticipants.length >= 2) {
-            chatType = "group";
-            groupParticipants = remoteParticipants;
-          }
-
-          log?.info(
-            `[twilio:inbound] conversation ${conversationSid} → ${chatType} (${smsParticipants.length} SMS participants) account=${account.accountId}`,
-          );
-
-          // Cache in DB
-          await upsertConversationMap({
-            conversationSid,
-            accountId: account.accountId,
-            chatType,
-            peerId: chatType === "direct" ? normalizedFrom : undefined,
-            participants: groupParticipants,
-          }).catch((err) =>
-            log?.warn?.(
-              `[twilio:inbound] DB upsert failed: ${err instanceof Error ? err.message : String(err)}`,
-            ),
-          );
-        } catch (apiErr) {
-          log?.warn(
-            `[twilio:inbound] Could not query participants for ${conversationSid}: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`,
-          );
-          return;
         }
-      }
 
-      if (!account) {
-        log?.warn(`[twilio:inbound] No account resolved for conversation ${conversationSid}`);
-        return;
+        // Cache result (even if API call failed — defaults to direct)
+        await upsertConversationMap({
+          conversationSid,
+          accountId,
+          chatType,
+          peerId: chatType === "direct" ? normalizedFrom : undefined,
+          participants: groupParticipants,
+        }).catch((err) =>
+          log?.warn?.(`[twilio:inbound] DB upsert failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
-
-      const accountId = account.accountId;
-      const ourDid = account.fromNumber ?? proxyAddress;
 
       log?.info(
-        `[twilio:inbound] onMessageAdded conversation=${conversationSid} from=${normalizedFrom} → account=${accountId}`,
+        `[twilio:inbound] onMessageAdded ${chatType} conversation=${conversationSid} from=${normalizedFrom} account=${accountId}`,
       );
-
-      const peerId = chatType === "group" ? conversationSid : normalizedFrom;
 
       // ── Access control ───────────────────────────────────────────────
       const dmPolicy = account.config.dmPolicy ?? "pairing";
       const allowFrom = account.config.allowFrom ?? [];
 
-      if (dmPolicy === "disabled") {
-        log?.debug?.(`[twilio:inbound] DMs disabled for account ${accountId}`);
-        return;
+      if (chatType === "direct") {
+        if (dmPolicy === "disabled") {
+          log?.debug?.(`[twilio:inbound] DMs disabled for account ${accountId}`);
+          return;
+        }
+        if (
+          dmPolicy === "allowlist" &&
+          !allowFrom.includes("*") &&
+          !allowFrom.some((entry) => normalizeE164(entry) === normalizedFrom)
+        ) {
+          log?.debug?.(`[twilio:inbound] ${normalizedFrom} not in allowFrom for ${accountId}`);
+          return;
+        }
       }
 
-      if (
-        dmPolicy === "allowlist" &&
-        !allowFrom.includes("*") &&
-        !allowFrom.some((entry) => normalizeE164(entry) === normalizedFrom)
-      ) {
-        log?.debug?.(`[twilio:inbound] ${normalizedFrom} not in allowFrom for ${accountId}`);
-        return;
-      }
-
-      // ── Build session key ────────────────────────────────────────────
+      // ── Session key ──────────────────────────────────────────────────
+      // Use ConversationSid as the stable peer ID for both direct and group.
+      // For direct, also key on sender phone so each contact has its own session.
       const sessionKey =
         chatType === "group"
           ? `twilio:${accountId}:group:${conversationSid}`
           : `twilio:${accountId}:direct:${normalizedFrom}`;
 
-      // ── Upsert conversation reference + log inbound ──────────────────
+      // ── Upsert conversation store + log inbound ──────────────────────
       const store = createTwilioConversationStore({
         accountId,
         cfg: { channels: { twilio: (cfg as any).channels?.twilio } } as any,
@@ -272,7 +254,7 @@ export async function handleInboundMessage(
         log?.debug?.("[twilio:inbound] Failed to write to conversation store");
       }
 
-      // ── Contact enrichment ───────────────────────────────────────────
+      // ── Contact lookup for current sender ────────────────────────────
       let contactInfo: Record<string, unknown> | undefined;
       try {
         const contactLookupCfg =
@@ -287,15 +269,31 @@ export async function handleInboundMessage(
         // Non-fatal
       }
 
+      // ── Build message body for agent ─────────────────────────────────
+      // For group conversations, prepend a clear warning so the agent
+      // understands this is not a private 1:1 exchange. Each participant's
+      // message arrives separately — the agent needs context to know who
+      // is speaking and that others are in the thread.
+      let agentMessageBody = messageText;
+      if (chatType === "group") {
+        const senderLabel = (contactInfo as any)?.name
+          ? `${(contactInfo as any).name} (${normalizedFrom})`
+          : normalizedFrom;
+        const participantList = (groupParticipants ?? []).join(", ") || "unknown";
+        agentMessageBody =
+          `***THIS IS A GROUP CONVERSATION, NOT PRIVATE***\n` +
+          `Sender: ${senderLabel}\n` +
+          `All participants: ${participantList}\n` +
+          `---\n` +
+          messageText;
+      }
+
       // ── Media ────────────────────────────────────────────────────────
       const media = extractMedia(body);
 
       // ── Routing ──────────────────────────────────────────────────────
       const runtime = getTwilioRuntime();
-      const fromAddress =
-        chatType === "group"
-          ? `twilio:group:${conversationSid}`
-          : `twilio:${normalizedFrom}`;
+      const peerId = chatType === "group" ? conversationSid : normalizedFrom;
 
       const route = runtime.channel.routing.resolveAgentRoute({
         cfg,
@@ -305,15 +303,15 @@ export async function handleInboundMessage(
       });
 
       log?.info(
-        `[twilio:inbound] dispatch ${chatType}${chatType === "group" ? ` conversation=${conversationSid}` : ""} from=${normalizedFrom} → session=${route.sessionKey}`,
+        `[twilio:inbound] dispatch ${chatType} from=${normalizedFrom} → session=${route.sessionKey}`,
       );
 
       // ── Build inbound context ────────────────────────────────────────
       const inboundCtx: Record<string, unknown> = {
-        Body: messageText,
+        Body: agentMessageBody,
         RawBody: messageText,
-        CommandBody: messageText,
-        From: fromAddress,
+        CommandBody: agentMessageBody,
+        From: chatType === "group" ? `twilio:group:${conversationSid}` : `twilio:${normalizedFrom}`,
         To: ourDid,
         SessionKey: route.sessionKey,
         AccountId: accountId,
@@ -370,6 +368,7 @@ export async function handleInboundMessage(
       }
 
       // ── Dispatch reply via Conversations API ─────────────────────────
+      // Always reply to ConversationSid — Twilio fans out to all participants.
       await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: inboundCtx as any,
         cfg: cfg as any,
