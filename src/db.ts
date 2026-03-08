@@ -98,7 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_twilio_conv_did_phone
 // ── Resolve DB path ─────────────────────────────────────────────────────────
 
 function resolveDbPath(cfg?: TwilioConfig): string {
-  // 1. Twilio plugin config
+  // 1. Twilio plugin config (shared preferred, top-level for backward compat)
+  if (cfg?.shared?.dbPath?.trim()) return cfg.shared.dbPath.trim();
   if (cfg?.dbPath?.trim()) return cfg.dbPath.trim();
 
   // 2. Environment variable

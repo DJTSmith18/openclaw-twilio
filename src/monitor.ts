@@ -33,9 +33,10 @@ export async function monitorTwilioProvider(
   // Initialize shared SQLite database (contacts + conversation history)
   await initDatabase(section);
 
-  const webhookPort = section?.webhook?.port ?? 3100;
-  const webhookPath = section?.webhook?.path ?? "/sms";
-  const statusPath = section?.webhook?.statusPath ?? "/sms/status";
+  const webhookCfg = section?.shared?.webhook ?? section?.webhook;
+  const webhookPort = webhookCfg?.port ?? 3100;
+  const webhookPath = webhookCfg?.path ?? "/sms";
+  const statusPath = webhookCfg?.statusPath ?? "/sms/status";
 
   // Dynamic import Express 5
   const express = await import("express");
@@ -46,7 +47,7 @@ export async function monitorTwilioProvider(
 
   // Twilio signature validation middleware
   const authToken = credentials.authToken;
-  const baseUrl = section?.webhook?.baseUrl;
+  const baseUrl = webhookCfg?.baseUrl;
 
   if (baseUrl) {
     try {

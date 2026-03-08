@@ -63,7 +63,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     pass "channels.twilio section exists"
 
     # Check credentials
-    SID=$(jq -r '.channels.twilio.accountSid // ""' "$CONFIG_FILE")
+    SID=$(jq -r '.channels.twilio.shared.accountSid // .channels.twilio.accountSid // ""' "$CONFIG_FILE")
     if [[ -n "$SID" ]]; then
       pass "accountSid configured"
     else
@@ -121,7 +121,7 @@ echo
 # ── 5. Database ──────────────────────────────────────────────────────────────
 bold "5. Database"
 
-DB_PATH=$(jq -r '.channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
+DB_PATH=$(jq -r '.channels.twilio.shared.dbPath // .channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
 if [[ -z "$DB_PATH" ]]; then
   DB_PATH="$HOME/.openclaw/shared/sms.db"
 fi
@@ -176,8 +176,8 @@ echo
 # ── 6. Twilio API Connectivity ───────────────────────────────────────────────
 bold "6. Twilio API Connectivity"
 
-SID=$(jq -r '.channels.twilio.accountSid // ""' "$CONFIG_FILE" 2>/dev/null)
-TOKEN=$(jq -r '.channels.twilio.authToken // ""' "$CONFIG_FILE" 2>/dev/null)
+SID=$(jq -r '.channels.twilio.shared.accountSid // .channels.twilio.accountSid // ""' "$CONFIG_FILE" 2>/dev/null)
+TOKEN=$(jq -r '.channels.twilio.shared.authToken // .channels.twilio.authToken // ""' "$CONFIG_FILE" 2>/dev/null)
 
 # Fallback to env
 SID="${SID:-${TWILIO_ACCOUNT_SID:-}}"
@@ -227,8 +227,8 @@ echo
 # ── 6. Webhook reachability ──────────────────────────────────────────────────
 bold "7. Webhook Reachability"
 
-BASE_URL=$(jq -r '.channels.twilio.webhook.baseUrl // ""' "$CONFIG_FILE" 2>/dev/null)
-WEBHOOK_PATH=$(jq -r '.channels.twilio.webhook.path // "/sms"' "$CONFIG_FILE" 2>/dev/null)
+BASE_URL=$(jq -r '.channels.twilio.shared.webhook.baseUrl // .channels.twilio.webhook.baseUrl // ""' "$CONFIG_FILE" 2>/dev/null)
+WEBHOOK_PATH=$(jq -r '.channels.twilio.shared.webhook.path // .channels.twilio.webhook.path // "/sms"' "$CONFIG_FILE" 2>/dev/null)
 
 if [[ -n "$BASE_URL" ]]; then
   HEALTH_URL="${BASE_URL}/health"
@@ -243,7 +243,7 @@ else
 fi
 
 # Test local port
-PORT=$(jq -r '.channels.twilio.webhook.port // 3100' "$CONFIG_FILE" 2>/dev/null)
+PORT=$(jq -r '.channels.twilio.shared.webhook.port // .channels.twilio.webhook.port // 3100' "$CONFIG_FILE" 2>/dev/null)
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
 if [[ "$HTTP_CODE" == "200" ]]; then
   pass "Local webhook responding on port $PORT"

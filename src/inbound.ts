@@ -168,11 +168,12 @@ export async function handleInboundMessage(
   let contactInfo: Record<string, unknown> | undefined;
   try {
     const twilioSection = (cfg as any).channels?.twilio as TwilioConfig | undefined;
+    const contactLookupCfg = twilioSection?.shared?.contactLookup ?? twilioSection?.contactLookup;
     contactInfo = await lookupContact(normalizedFrom, {
-      table: twilioSection?.contactLookup?.table,
-      phoneColumn: twilioSection?.contactLookup?.phoneColumn,
-      phoneMatch: twilioSection?.contactLookup?.phoneMatch,
-      selectColumns: twilioSection?.contactLookup?.selectColumns,
+      table: contactLookupCfg?.table,
+      phoneColumn: contactLookupCfg?.phoneColumn,
+      phoneMatch: contactLookupCfg?.phoneMatch,
+      selectColumns: contactLookupCfg?.selectColumns,
     });
   } catch {
     // Non-fatal

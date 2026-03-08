@@ -136,7 +136,7 @@ export async function sendTwilioGroupMessage(
 function buildStatusCallbackUrl(
   section: TwilioConfig | undefined,
 ): string | undefined {
-  const webhook = section?.webhook;
+  const webhook = section?.shared?.webhook ?? section?.webhook;
   if (!webhook?.baseUrl) return undefined;
 
   const base = webhook.baseUrl.replace(/\/+$/, "");

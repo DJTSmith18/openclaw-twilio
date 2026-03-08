@@ -78,17 +78,17 @@ while true; do
   case "$choice" in
     1)
       bold "Twilio Credentials"
-      SID=$(jq -r '.channels.twilio.accountSid // "not set"' "$CONFIG_FILE")
+      SID=$(jq -r '.channels.twilio.shared.accountSid // .channels.twilio.accountSid // "not set"' "$CONFIG_FILE")
       echo "  Current Account SID: ${SID:0:8}..."
       prompt NEW_SID "New Account SID (blank = keep)" ""
       prompt_secret NEW_TOKEN "New Auth Token (blank = keep)" ""
       if [[ -n "$NEW_SID" || -n "$NEW_TOKEN" ]]; then
         backup_config
         if [[ -n "$NEW_SID" ]]; then
-          update_twilio_config --arg v "$NEW_SID" '.channels.twilio.accountSid = $v'
+          update_twilio_config --arg v "$NEW_SID" '.channels.twilio.shared.accountSid = $v'
         fi
         if [[ -n "$NEW_TOKEN" ]]; then
-          update_twilio_config --arg v "$NEW_TOKEN" '.channels.twilio.authToken = $v'
+          update_twilio_config --arg v "$NEW_TOKEN" '.channels.twilio.shared.authToken = $v'
         fi
         green "Credentials updated"
       fi
@@ -160,7 +160,7 @@ while true; do
 
     3)
       bold "Webhook Settings"
-      jq '.channels.twilio.webhook // {}' "$CONFIG_FILE" 2>/dev/null
+      jq '.channels.twilio.shared.webhook // .channels.twilio.webhook // {}' "$CONFIG_FILE" 2>/dev/null
       prompt NEW_PORT "Port (blank = keep)" ""
       prompt NEW_PATH "Path (blank = keep)" ""
       prompt NEW_STATUS "Status path (blank = keep)" ""
@@ -168,13 +168,13 @@ while true; do
       if [[ -n "$NEW_PORT" || -n "$NEW_PATH" || -n "$NEW_STATUS" || -n "$NEW_BASE" ]]; then
         backup_config
         [[ -n "$NEW_PORT" ]] && update_twilio_config --argjson v "$NEW_PORT" \
-          '.channels.twilio.webhook.port = $v'
+          '.channels.twilio.shared.webhook.port = $v'
         [[ -n "$NEW_PATH" ]] && update_twilio_config --arg v "$NEW_PATH" \
-          '.channels.twilio.webhook.path = $v'
+          '.channels.twilio.shared.webhook.path = $v'
         [[ -n "$NEW_STATUS" ]] && update_twilio_config --arg v "$NEW_STATUS" \
-          '.channels.twilio.webhook.statusPath = $v'
+          '.channels.twilio.shared.webhook.statusPath = $v'
         [[ -n "$NEW_BASE" ]] && update_twilio_config --arg v "$NEW_BASE" \
-          '.channels.twilio.webhook.baseUrl = $v'
+          '.channels.twilio.shared.webhook.baseUrl = $v'
         green "Webhook settings updated"
       fi
       ;;
@@ -293,23 +293,23 @@ while true; do
     8)
       bold "Status Callbacks"
       echo "Current webhook config:"
-      jq '.channels.twilio.webhook // {}' "$CONFIG_FILE" 2>/dev/null
+      jq '.channels.twilio.shared.webhook // .channels.twilio.webhook // {}' "$CONFIG_FILE" 2>/dev/null
       echo
       echo "Status callbacks are automatically configured when baseUrl is set."
       echo "Current status path:"
-      jq -r '.channels.twilio.webhook.statusPath // "/sms/status"' "$CONFIG_FILE"
+      jq -r '.channels.twilio.shared.webhook.statusPath // .channels.twilio.webhook.statusPath // "/sms/status"' "$CONFIG_FILE"
       prompt NEW_STATUS_PATH "New status path (blank = keep)" ""
       if [[ -n "$NEW_STATUS_PATH" ]]; then
         backup_config
         update_twilio_config --arg v "$NEW_STATUS_PATH" \
-          '.channels.twilio.webhook.statusPath = $v'
+          '.channels.twilio.shared.webhook.statusPath = $v'
         green "Status callback path updated"
       fi
       ;;
 
     9)
       bold "Database & Contacts"
-      DB_PATH=$(jq -r '.channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
+      DB_PATH=$(jq -r '.channels.twilio.shared.dbPath // .channels.twilio.dbPath // ""' "$CONFIG_FILE" 2>/dev/null)
       if [[ -z "$DB_PATH" ]]; then
         DB_PATH="$HOME/.openclaw/shared/sms.db"
       fi
@@ -325,7 +325,7 @@ while true; do
         TABLES=$(sqlite3 "$DB_PATH" ".tables" 2>/dev/null || echo "(error)")
         echo "  Tables: $TABLES"
 
-        CONTACT_TABLE=$(jq -r '.channels.twilio.contactLookup.table // "contacts"' "$CONFIG_FILE" 2>/dev/null)
+        CONTACT_TABLE=$(jq -r '.channels.twilio.shared.contactLookup.table // .channels.twilio.contactLookup.table // "contacts"' "$CONFIG_FILE" 2>/dev/null)
         CONTACT_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM ${CONTACT_TABLE};" 2>/dev/null || echo "0")
         CONV_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM twilio_conversations;" 2>/dev/null || echo "0")
         echo "  Contacts ($CONTACT_TABLE): $CONTACT_COUNT rows"
@@ -342,11 +342,11 @@ while true; do
         case "$db_sub" in
           a)
             echo
-            PHONE_COL=$(jq -r '.channels.twilio.contactLookup.phoneColumn // "phone"' "$CONFIG_FILE" 2>/dev/null)
+            PHONE_COL=$(jq -r '.channels.twilio.shared.contactLookup.phoneColumn // .channels.twilio.contactLookup.phoneColumn // "phone"' "$CONFIG_FILE" 2>/dev/null)
             sqlite3 -header -column "$DB_PATH" "SELECT * FROM ${CONTACT_TABLE} LIMIT 20;" 2>/dev/null || echo "(empty or error)"
             ;;
           b)
-            PHONE_COL=$(jq -r '.channels.twilio.contactLookup.phoneColumn // "phone"' "$CONFIG_FILE" 2>/dev/null)
+            PHONE_COL=$(jq -r '.channels.twilio.shared.contactLookup.phoneColumn // .channels.twilio.contactLookup.phoneColumn // "phone"' "$CONFIG_FILE" 2>/dev/null)
             printf 'Phone (10 digits or E.164): '
             read -r NEW_PHONE
             prompt NEW_NAME "Name" ""
@@ -367,7 +367,7 @@ while true; do
             prompt NEW_DB_PATH "New database path" "$DB_PATH"
             if [[ -n "$NEW_DB_PATH" && "$NEW_DB_PATH" != "$DB_PATH" ]]; then
               backup_config
-              update_twilio_config --arg v "$NEW_DB_PATH" '.channels.twilio.dbPath = $v'
+              update_twilio_config --arg v "$NEW_DB_PATH" '.channels.twilio.shared.dbPath = $v'
               green "Database path updated to $NEW_DB_PATH"
             fi
             ;;
@@ -378,7 +378,7 @@ while true; do
         prompt NEW_DB_PATH "Set database path" "$DB_PATH"
         if [[ -n "$NEW_DB_PATH" ]]; then
           backup_config
-          update_twilio_config --arg v "$NEW_DB_PATH" '.channels.twilio.dbPath = $v'
+          update_twilio_config --arg v "$NEW_DB_PATH" '.channels.twilio.shared.dbPath = $v'
           green "Database path updated"
         fi
       fi

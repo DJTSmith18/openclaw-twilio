@@ -22,8 +22,8 @@ export type TwilioAccountConfig = {
   textChunkLimit?: number;
 };
 
-/** Top-level config: shared credentials + per-account overrides. */
-export type TwilioConfig = {
+/** Shared infrastructure config — credentials, DB, webhook. Nested under `shared` to prevent openclaw doctor from treating them as single-account fields. */
+export type TwilioSharedConfig = {
   accountSid?: string;
   authToken?: string;
   dbPath?: string;
@@ -40,7 +40,23 @@ export type TwilioConfig = {
     statusPath?: string;
     baseUrl?: string;
   };
+};
+
+/** Top-level channel config: shared infrastructure + per-account overrides. */
+export type TwilioConfig = {
+  /** Shared credentials, DB, and webhook config (preferred location). */
+  shared?: TwilioSharedConfig;
   accounts?: Record<string, TwilioAccountConfig>;
+  /**
+   * Legacy top-level fields — still read for backward compatibility and for
+   * the env-var fallback mode (no explicit accounts configured).
+   * New installs write these fields inside `shared` instead.
+   */
+  accountSid?: string;
+  authToken?: string;
+  dbPath?: string;
+  contactLookup?: TwilioSharedConfig["contactLookup"];
+  webhook?: TwilioSharedConfig["webhook"];
 } & TwilioAccountConfig;
 
 export type ResolvedTwilioAccount = {

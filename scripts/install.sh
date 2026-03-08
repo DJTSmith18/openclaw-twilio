@@ -504,6 +504,22 @@ WEBHOOK_JSON=$(jq -n \
   --arg baseUrl "$WEBHOOK_BASE_URL" \
   '{port: $port, path: $path, statusPath: $statusPath} + (if $baseUrl != "" then {baseUrl: $baseUrl} else {} end)')
 
+# Build shared infrastructure JSON — nested under "shared" so openclaw doctor
+# does not mistake these for single-account fields and attempt a migration.
+SHARED_JSON=$(jq -n \
+  --arg sid "$ACCOUNT_SID" \
+  --arg token "$AUTH_TOKEN" \
+  --arg dbPath "$DB_PATH" \
+  --argjson webhook "$WEBHOOK_JSON" \
+  --argjson contactLookup "$CONTACT_LOOKUP_JSON" \
+  '{
+    accountSid: $sid,
+    authToken: $token,
+    dbPath: $dbPath,
+    contactLookup: $contactLookup,
+    webhook: $webhook
+  }')
+
 # Build channel config.
 # Always use the accounts block even for a single DID — this keeps the
 # config structure consistent and makes adding DIDs later trivial.
@@ -511,42 +527,26 @@ WEBHOOK_JSON=$(jq -n \
 # entered (env-var fallback mode, number unknown at install time).
 if [[ ${#DIDS[@]} -gt 0 ]]; then
   CHANNEL_CONFIG=$(jq -n \
-    --arg sid "$ACCOUNT_SID" \
-    --arg token "$AUTH_TOKEN" \
-    --arg dbPath "$DB_PATH" \
-    --argjson webhook "$WEBHOOK_JSON" \
+    --argjson shared "$SHARED_JSON" \
     --argjson accounts "$ACCOUNTS_JSON" \
-    --argjson contactLookup "$CONTACT_LOOKUP_JSON" \
     '{
       enabled: true,
-      accountSid: $sid,
-      authToken: $token,
-      dbPath: $dbPath,
-      contactLookup: $contactLookup,
-      webhook: $webhook,
+      shared: $shared,
       accounts: $accounts
     }')
 else
   # No DIDs entered — phone number comes from TWILIO_FROM_NUMBER at runtime.
   CHANNEL_CONFIG=$(jq -n \
-    --arg sid "$ACCOUNT_SID" \
-    --arg token "$AUTH_TOKEN" \
-    --arg dbPath "$DB_PATH" \
+    --argjson shared "$SHARED_JSON" \
     --arg policy "$DM_POLICY" \
     --argjson allowFrom "$ALLOW_FROM" \
     --arg groupPolicy "$GROUP_POLICY" \
-    --argjson webhook "$WEBHOOK_JSON" \
-    --argjson contactLookup "$CONTACT_LOOKUP_JSON" \
     '{
       enabled: true,
-      accountSid: $sid,
-      authToken: $token,
-      dbPath: $dbPath,
-      contactLookup: $contactLookup,
+      shared: $shared,
       dmPolicy: $policy,
       allowFrom: $allowFrom,
-      groupPolicy: $groupPolicy,
-      webhook: $webhook
+      groupPolicy: $groupPolicy
     }')
 fi
 

@@ -9,9 +9,13 @@ export function resolveTwilioCredentials(
   cfg?: TwilioConfig,
 ): TwilioCredentials | undefined {
   const accountSid =
-    cfg?.accountSid?.trim() || process.env.TWILIO_ACCOUNT_SID?.trim();
+    cfg?.shared?.accountSid?.trim() ||
+    cfg?.accountSid?.trim() ||
+    process.env.TWILIO_ACCOUNT_SID?.trim();
   const authToken =
-    cfg?.authToken?.trim() || process.env.TWILIO_AUTH_TOKEN?.trim();
+    cfg?.shared?.authToken?.trim() ||
+    cfg?.authToken?.trim() ||
+    process.env.TWILIO_AUTH_TOKEN?.trim();
 
   if (!accountSid || !authToken) {
     return undefined;

@@ -74,14 +74,17 @@ export const twilioOnboardingAdapter: ChannelOnboardingAdapter = {
       fromNumber = phoneResult.trim();
     }
 
-    // Apply config
+    // Apply config — credentials go into shared to avoid openclaw doctor warnings
     (nextCfg as any).channels = {
       ...(nextCfg as any).channels,
       twilio: {
         ...section,
         enabled: true,
-        accountSid,
-        authToken,
+        shared: {
+          ...section.shared,
+          accountSid,
+          authToken,
+        },
         fromNumber,
       },
     };

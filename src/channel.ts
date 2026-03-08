@@ -408,7 +408,8 @@ export const twilioPlugin: ChannelPlugin<ResolvedTwilioAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const port =
-        getTwilioSection(ctx.cfg as OpenClawConfig)?.webhook?.port ?? 3100;
+        (getTwilioSection(ctx.cfg as OpenClawConfig)?.shared?.webhook ??
+          getTwilioSection(ctx.cfg as OpenClawConfig)?.webhook)?.port ?? 3100;
 
       (ctx as any).setStatus?.({
         accountId: ctx.accountId,

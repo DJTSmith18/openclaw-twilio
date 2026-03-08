@@ -162,26 +162,49 @@ if [[ "$IS_UPGRADE" == true ]]; then
 
   echo
 
-  # ── Config migration: strip top-level policy fields from multi-DID installs ─
-  # Older installs wrote dmPolicy/allowFrom/groupPolicy at the top level AND
-  # inside each account, causing "openclaw doctor" to misidentify the setup
-  # as single-account. Safe to remove — the values live in each account entry.
+  # ── Config migration ──────────────────────────────────────────────────────
+  # Migrate older config formats to the current structure:
+  #   1. Move accountSid/authToken/dbPath/contactLookup/webhook into shared{}
+  #   2. Remove top-level dmPolicy/allowFrom/groupPolicy from multi-DID setups
+  # Both issues caused "openclaw doctor" to flag the config for migration.
   if command -v jq &>/dev/null && [[ -f "$CONFIG_FILE" ]]; then
-    _has_accounts=$(jq -r '
-      .channels.twilio.accounts | keys | length
-    ' "$CONFIG_FILE" 2>/dev/null || echo "0")
+    _needs_migration=false
 
-    _has_toplevel_policy=$(jq -r '
-      .channels.twilio | has("dmPolicy") or has("allowFrom") or has("groupPolicy")
-    ' "$CONFIG_FILE" 2>/dev/null || echo "false")
+    _has_shared=$(jq -r '.channels.twilio | has("shared")' "$CONFIG_FILE" 2>/dev/null || echo "false")
+    _has_toplevel_creds=$(jq -r '.channels.twilio | has("accountSid")' "$CONFIG_FILE" 2>/dev/null || echo "false")
+    if [[ "$_has_shared" == "false" && "$_has_toplevel_creds" == "true" ]]; then
+      _needs_migration=true
+    fi
 
+    _has_accounts=$(jq -r '.channels.twilio.accounts | keys | length' "$CONFIG_FILE" 2>/dev/null || echo "0")
+    _has_toplevel_policy=$(jq -r '.channels.twilio | has("dmPolicy") or has("allowFrom") or has("groupPolicy")' "$CONFIG_FILE" 2>/dev/null || echo "false")
     if [[ "$_has_accounts" -gt 0 && "$_has_toplevel_policy" == "true" ]]; then
-      cyan "Migrating config: removing top-level policy fields from multi-DID setup..."
+      _needs_migration=true
+    fi
+
+    if [[ "$_needs_migration" == true ]]; then
+      cyan "Migrating config to current format..."
       _backup="${CONFIG_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
       cp "$CONFIG_FILE" "$_backup"
       _tmp=$(mktemp)
-      jq 'del(.channels.twilio.dmPolicy, .channels.twilio.allowFrom, .channels.twilio.groupPolicy)' \
-        "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
+      jq '
+        .channels.twilio |= (
+          . as $t |
+          . + {
+            shared: (
+              ($t.shared // {}) + {
+                accountSid:   $t.accountSid,
+                authToken:    $t.authToken,
+                dbPath:       $t.dbPath,
+                contactLookup: $t.contactLookup,
+                webhook:      $t.webhook
+              } | with_entries(select(.value != null))
+            )
+          }
+          | del(.accountSid, .authToken, .dbPath, .contactLookup, .webhook,
+                .dmPolicy, .allowFrom, .groupPolicy)
+        )
+      ' "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
       green "Config migrated (backup: $_backup)"
       yellow "Restart OpenClaw to apply: openclaw restart"
     else
@@ -197,7 +220,7 @@ if [[ "$IS_UPGRADE" == true ]]; then
   cyan "Current config summary:"
   if command -v jq &>/dev/null; then
     jq -r '
-      .channels.twilio |
+      .channels.twilio.shared |
       "  Account SID:   " + (.accountSid[0:8] // "?") + "...",
       "  Webhook port:  " + (.webhook.port // "?" | tostring),
       "  Webhook path:  " + (.webhook.path // "?"),
