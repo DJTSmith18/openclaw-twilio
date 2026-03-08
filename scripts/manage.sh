@@ -71,7 +71,8 @@ while true; do
   echo "  9) Database & Contacts   — view DB info, manage contacts"
   echo "  10) Conversation Map     — list/delete cached CH... session entries"
   echo "  11) View Current Config  — display full config as formatted JSON"
-  echo "  12) Save & Exit"
+  echo "  12) Conversations API Migration — set conversationServiceSid, messagingServiceSid"
+  echo "  13) Save & Exit"
   echo
   printf 'Choice: '
   read -r choice
@@ -438,6 +439,59 @@ while true; do
       ;;
 
     12)
+      bold "Conversations API Migration"
+      echo "Migrates config from the old Twilio Messages API to the Conversations API."
+      echo
+      echo "Current values:"
+      _cur_conv=$(jq -r '.channels.twilio.shared.conversationServiceSid // "(not set)"' "$CONFIG_FILE" 2>/dev/null)
+      _cur_msg=$(jq -r '
+        .channels.twilio.accounts // {} | to_entries[] |
+        "  " + .key + ": messagingServiceSid=" + (.value.messagingServiceSid // "(not set)")
+      ' "$CONFIG_FILE" 2>/dev/null || jq -r '.channels.twilio.messagingServiceSid // "(not set)"' "$CONFIG_FILE" 2>/dev/null)
+      echo "  conversationServiceSid (shared): $_cur_conv"
+      echo "  messagingServiceSid (per DID):   $_cur_msg"
+      echo
+      echo "  a) Set conversationServiceSid (IS...)  — required for Conversations API"
+      echo "  b) Set messagingServiceSid for a DID (MG...) — recommended for outbound SMS"
+      echo "  c) Back"
+      printf 'Choice: '
+      read -r mig_sub
+      case "$mig_sub" in
+        a)
+          echo "Find this in: Twilio Console → Conversations → Manage → Services → your service → SID"
+          prompt NEW_CONV_SID "Conversations Service SID (IS...)" ""
+          if [[ -n "$NEW_CONV_SID" ]]; then
+            if [[ "$NEW_CONV_SID" != IS* ]]; then
+              yellow "Warning: SID does not start with IS — verify in Twilio Console."
+            fi
+            backup_config
+            update_twilio_config --arg v "$NEW_CONV_SID" \
+              '.channels.twilio.shared.conversationServiceSid = $v'
+            green "conversationServiceSid set: $NEW_CONV_SID"
+            yellow "Restart OpenClaw to apply. The plugin will register your DID with Twilio Conversations on startup."
+          fi
+          ;;
+        b)
+          echo "Find this in: Twilio Console → Messaging → Services → your service → SID"
+          echo "Current DIDs:"
+          jq -r '.channels.twilio.accounts // {} | to_entries[] | "  " + .key + " (" + (.value.name // "unnamed") + ")"' "$CONFIG_FILE" 2>/dev/null || echo "  (none)"
+          prompt MSG_DID "DID (phone number) to configure" ""
+          prompt NEW_MSG_SID "Messaging Service SID (MG...)" ""
+          if [[ -n "$MSG_DID" && -n "$NEW_MSG_SID" ]]; then
+            if [[ "$NEW_MSG_SID" != MG* ]]; then
+              yellow "Warning: SID does not start with MG — verify in Twilio Console."
+            fi
+            backup_config
+            update_twilio_config --arg d "$MSG_DID" --arg v "$NEW_MSG_SID" \
+              '.channels.twilio.accounts[$d].messagingServiceSid = $v'
+            green "messagingServiceSid set for $MSG_DID: $NEW_MSG_SID"
+          fi
+          ;;
+        *) ;;
+      esac
+      ;;
+
+    13)
       green "Done."
       exit 0
       ;;
