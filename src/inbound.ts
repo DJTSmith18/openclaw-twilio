@@ -299,13 +299,13 @@ export async function handleInboundMessage(
 
       const header =
         chatType === "group"
-          ? `[ GROUP CONVERSATION - NOT PRIVATE ]`
-          : `[ PRIVATE CONVERSATION ]`;
+          ? `👥 GROUP CONVERSATION — NOT PRIVATE`
+          : `🔒 PRIVATE CONVERSATION`;
 
       const lines = [header, ...senderLines];
 
       if (chatType === "group" && newParticipants.length > 0) {
-        lines.push(`! NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
+        lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
       lines.push(`Message: ${messageText}`);
       const agentMessageBody = lines.join("\n");
