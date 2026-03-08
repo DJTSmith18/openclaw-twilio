@@ -297,15 +297,17 @@ export async function handleInboundMessage(
         senderLines.push(`  (not in contacts)`);
       }
 
-      const lines =
+      const header =
         chatType === "group"
-          ? [`***THIS IS A GROUP CONVERSATION, NOT PRIVATE***`, ...senderLines]
-          : [`**THIS CONVERSATION IS PRIVATE**`, ...senderLines];
+          ? `[ GROUP CONVERSATION - NOT PRIVATE ]`
+          : `[ PRIVATE CONVERSATION ]`;
+
+      const lines = [header, ...senderLines];
 
       if (chatType === "group" && newParticipants.length > 0) {
-        lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
+        lines.push(`! NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
-      lines.push(`---`, messageText);
+      lines.push(`Message: ${messageText}`);
       const agentMessageBody = lines.join("\n");
 
       // ── Media ────────────────────────────────────────────────────────
