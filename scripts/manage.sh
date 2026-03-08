@@ -57,7 +57,8 @@ require_config
 # ── Main menu ─────────────────────────────────────────────────────────────────
 while true; do
   echo
-  bold "Twilio Plugin Management"
+  _ver=$(jq -r '.version // "unknown"' "$(dirname "$0")/../package.json" 2>/dev/null || echo "unknown")
+  bold "Twilio Plugin Management (v${_ver})"
   echo "─────────────────────────"
   echo "  1) Twilio Credentials    — change Account SID, Auth Token"
   echo "  2) DID Management        — add/remove/enable/disable phone numbers"
