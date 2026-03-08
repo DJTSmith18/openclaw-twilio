@@ -207,6 +207,18 @@ if [[ "$IS_UPGRADE" == true ]]; then
       cyan "Config structure is up to date."
     fi
 
+    # ── Migrate top-level messagingServiceSid into shared ────────────────
+    _toplevel_msg=$(jq -r '.channels.twilio.messagingServiceSid // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    _shared_msg=$(jq -r '.channels.twilio.shared.messagingServiceSid // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+    if [[ -n "$_toplevel_msg" && -z "$_shared_msg" ]]; then
+      cyan "Migrating messagingServiceSid into shared..."
+      _tmp=$(mktemp)
+      jq '.channels.twilio.shared.messagingServiceSid = .channels.twilio.messagingServiceSid
+          | del(.channels.twilio.messagingServiceSid)' \
+        "$CONFIG_FILE" > "$_tmp" && mv "$_tmp" "$CONFIG_FILE"
+      green "messagingServiceSid moved to shared: $_toplevel_msg"
+    fi
+
     # ── Conversations API migration notice ────────────────────────────────
     _has_base_url=$(jq -r '.channels.twilio.shared.webhook.baseUrl // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
     if [[ -z "$_has_base_url" ]]; then
