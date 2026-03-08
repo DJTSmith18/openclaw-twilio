@@ -70,7 +70,9 @@ export async function sendTwilioMessage(
       createParams.statusCallback = statusCallbackUrl;
     }
 
+    console.log(`[twilio:send] creating message to=${to} from=${createParams.from ?? createParams.messagingServiceSid} body="${(text ?? "").slice(0, 60)}"`);
     const message = await client.messages.create(createParams as any);
+    console.log(`[twilio:send] sent sid=${message.sid} to=${to} status=${message.status}`);
 
     // Log outbound message to conversation history
     try {
@@ -96,6 +98,7 @@ export async function sendTwilioMessage(
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[twilio:send] FAILED to=${to}: ${msg}`);
     return { ok: false, error: msg };
   }
 }
