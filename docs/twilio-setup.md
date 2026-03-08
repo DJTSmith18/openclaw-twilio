@@ -1,73 +1,54 @@
 # Twilio Conversations — Setup Guide
 
-Follow these steps **in order**. The plugin handles webhook registration automatically,
-but you need to create the services and point the config at them first.
+You need to create two things in the Twilio Console, then add their IDs to your
+config. The plugin handles everything else automatically on startup.
+
+---
+
+## What you need and where to find it
+
+| What | Starts with | Where |
+|---|---|---|
+| **Conversations Service SID** | `IS...` | Conversations → Manage → Services |
+| **Messaging Service SID** | `MG...` | Messaging → Services |
+
+These are two different things. A Conversations Service holds the conversation threads.
+A Messaging Service is what sends and receives SMS on behalf of your phone number.
 
 ---
 
 ## Step 1 — Create a Conversations Service
 
-A Conversations Service is the container that holds your conversations and messages.
-Some accounts have a default; if yours does not, create one now.
-
 1. Log in to [console.twilio.com](https://console.twilio.com)
 2. In the left sidebar click **Conversations**
 3. Click **Manage** → **Services**
-4. If you already see a service listed, skip to Step 2
-5. If the list is empty, click **Create new Conversation Service**
-6. Give it a name (e.g. `OpenClaw`)
-7. Click **Create**
-8. You will land on the service page — copy the **Service SID** at the top
-   (it starts with `IS...`, e.g. `IS1234abcd1234abcd1234abcd1234abcd`)
+4. Click **Create new Conversation Service**
+5. Give it a name (e.g. `OpenClaw`) and click **Create**
+6. You land on the service page — copy the **SID** at the top (`IS...`)
 
-**Add the SID to your `openclaw.json`:**
+Add it to your `openclaw.json`:
 ```json
-"channels": {
-  "twilio": {
-    "shared": {
-      "accountSid": "ACxxxxxxxx...",
-      "authToken": "...",
-      "conversationServiceSid": "ISxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "webhook": {
-        "port": 3100,
-        "path": "/sms2",
-        "baseUrl": "https://your-public-domain.example.com"
-      }
-    },
-    "fromNumber": "+12125551234"
-  }
+"shared": {
+  "conversationServiceSid": "ISxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 
 ---
 
-## Step 2 — Create a Messaging Service and add your phone number
-
-A Messaging Service links your Twilio phone number to the Conversations Service so
-that Twilio knows which DID to use for outbound SMS replies.
+## Step 2 — Create a Messaging Service
 
 1. In the left sidebar click **Messaging**
 2. Click **Services**
 3. Click **Create Messaging Service**
-4. Give it a name (e.g. `OpenClaw SMS`)
-5. Under **Select what you want to do with this Messaging Service** choose
-   **Market my services to users** (or any option — it does not matter)
-6. Click **Create Messaging Service**
-7. You are now on the Sender Pool tab — click **Add Senders**
-8. Choose **Phone Number** from the dropdown, click **Continue**
-9. Tick the checkbox next to your phone number, click **Add Phone Numbers**
-10. Click **Step 3: Set up integration** (or navigate to the **Integration** tab)
-11. Leave all webhook fields **blank** for now — the plugin registers its own webhooks
-12. Click **Complete Messaging Service Setup**
-13. Copy the **Messaging Service SID** from the top of the page
-    (starts with `MG...`, e.g. `MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+4. Give it a name (e.g. `OpenClaw SMS`) and click **Create Messaging Service**
+5. On the next screen click **Step 3: Set up integration** (skip sender pool for now)
+6. Leave all fields blank and click **Complete Messaging Service Setup**
+7. On the service page, copy the **SID** at the top (`MG...`)
 
-**Add it to your `openclaw.json`:**
+Add it to your `openclaw.json` under your phone number account:
 ```json
-"channels": {
-  "twilio": {
-    "shared": { ... },
-    "fromNumber": "+12125551234",
+"accounts": {
+  "+12125551234": {
     "messagingServiceSid": "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   }
 }
@@ -75,135 +56,115 @@ that Twilio knows which DID to use for outbound SMS replies.
 
 ---
 
-## Step 3 — Clear the old phone number webhook
+## Step 3 — Attach your phone number to the Messaging Service
 
-Your phone number previously had a plain SMS webhook URL set on it. Now that
-Conversations owns the DID, that URL is no longer used and should be cleared to
-prevent conflicts.
+Your phone number needs to be linked to the Messaging Service you just created.
+Do this from the phone number page, not from the Messaging Service.
 
 1. In the left sidebar click **Phone Numbers**
 2. Click **Manage** → **Active Numbers**
-3. Click your phone number (e.g. `+12125551234`)
-4. Scroll down to **Messaging Configuration**
-5. Under **"A message comes in"** you will see a webhook URL — **delete it** (clear
-   the field completely)
-6. Leave the dropdown set to **Webhook**
+3. Click your phone number
+4. Scroll to **Messaging Configuration**
+5. Under **Messaging Service**, click the dropdown and select the service you just
+   created (`OpenClaw SMS`)
+6. Clear the **"A message comes in"** webhook URL field completely (leave it blank)
 7. Click **Save configuration**
+
+> If you had a plain webhook URL set here before, clearing it is important.
+> Once the plugin registers Address Configuration on startup, Twilio routes
+> all inbound SMS through Conversations instead.
 
 ---
 
-## Step 4 — Start OpenClaw
+## Step 4 — Update openclaw.json
 
-Restart OpenClaw. On startup the plugin will automatically:
+Your full config should look like this:
 
-1. Open the webhook server on your configured port
-2. Register an **Address Configuration** in Twilio that tells Twilio:
-   > "When someone texts `+12125551234`, auto-create a Conversation and POST
-   > the `onMessageAdded` event to `https://your-domain.example.com/sms2`"
+```json
+"channels": {
+  "twilio": {
+    "enabled": true,
+    "shared": {
+      "accountSid":             "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "authToken":              "your-auth-token",
+      "conversationServiceSid": "ISxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "webhook": {
+        "port":    3100,
+        "path":    "/sms2",
+        "baseUrl": "https://your-public-domain.example.com"
+      }
+    },
+    "accounts": {
+      "+12125551234": {
+        "name":                "My Line",
+        "fromNumber":          "+12125551234",
+        "messagingServiceSid": "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "dmPolicy":            "pairing"
+      }
+    }
+  }
+}
+```
 
-Watch the logs — you should see:
+> **`baseUrl` is required.** Without it the plugin cannot register your phone number
+> with Twilio Conversations and no inbound messages will arrive.
+
+---
+
+## Step 5 — Restart OpenClaw
+
+Restart OpenClaw. On startup you will see in the logs:
 
 ```
 [twilio:gateway] Webhook server listening on 0.0.0.0:3100
 [twilio:gateway] Address configuration created for +12125551234 → https://your-domain.example.com/sms2
 ```
 
-If you see `Address configuration already exists` that is also fine — it means the
-registration was already done on a previous run.
+This means Twilio now knows to send inbound SMS for your number to your webhook
+instead of the old plain SMS handler.
+
+If you see `Address configuration already exists` that is fine — it was already
+registered from a previous run.
 
 ---
 
-## Step 5 — Verify it worked in the Twilio Console
+## Step 6 — Verify
 
 1. In the left sidebar click **Conversations**
 2. Click **Manage** → **Address Configurations**
-3. You should see a row for your phone number with:
-   - **Type**: SMS
-   - **Address**: your E.164 phone number
-   - **Auto-creation enabled**: Yes
-   - **Webhook URL**: `https://your-domain.example.com/sms2`
+3. You should see your phone number listed with:
+   - Auto-creation: **Enabled**
+   - Webhook URL: your `baseUrl` + path (e.g. `https://your-domain.example.com/sms2`)
 
-If the row is missing, see the Troubleshooting section below.
+If the row is missing, check that `baseUrl` is set and restart OpenClaw again.
 
 ---
 
-## Step 6 — Send a test SMS
+## Step 7 — Send a test SMS
 
-Send an SMS from any mobile phone to your Twilio number. You should see in the
-OpenClaw logs:
+Send an SMS from any phone to your Twilio number. Check your OpenClaw logs for:
 
 ```
 [twilio:inbound] onMessageAdded conversationSid=CHxxxxxxxxxx author=+1xxxxxxxxxx
-[twilio:inbound] direct session twilio:default:direct:+1xxxxxxxxxx
 ```
 
-That confirms inbound is working. Replies from OpenClaw will go out via the
-Conversations API and appear on the same thread.
+That confirms everything is working.
 
 ---
 
 ## Troubleshooting
 
-**"Address configuration created" appears in logs but no inbound messages arrive**
+**Phone number not appearing in Messaging Service sender pool**
+Go to **Phone Numbers → Active Numbers → your number → Messaging Configuration**
+and select the Messaging Service from the dropdown there instead.
 
-Your reverse proxy may not be forwarding POST requests correctly. Verify that:
-- `https://your-domain.example.com/sms2` routes to `http://localhost:3100/sms2`
-- The proxy passes the raw body and the `X-Twilio-Signature` header unchanged
+**No inbound messages after restart**
+Confirm Address Configuration was registered (Step 6). If missing, check that
+`baseUrl` is set in config and has no trailing slash.
 
-**"Could not configure address" in the logs**
+**403 Forbidden on the webhook**
+`baseUrl` in your config does not exactly match the URL Twilio is sending to.
+No trailing slash, correct scheme (`https://`), correct domain.
 
-The plugin could not call the Twilio API on startup. Check:
-- `accountSid` and `authToken` are correct
-- `baseUrl` is set in your config (without it the plugin skips registration)
-- The server has outbound internet access
-
-**"403 Forbidden" on the webhook endpoint**
-
-Twilio signature validation failed. This usually means `baseUrl` in your config does
-not exactly match the URL Twilio is sending to. Make sure:
-- No trailing slash on `baseUrl`
-- Scheme matches (`https://` not `http://`)
-- If behind a proxy, the proxy is not rewriting the URL
-
-**Address Configuration row is missing from the Twilio Console**
-
-The registration did not run. Confirm `baseUrl` is set in your config, restart
-OpenClaw, and check the logs for any error after the "Webhook server listening" line.
-
----
-
-## Quick reference — what goes where in openclaw.json
-
-```json
-{
-  "channels": {
-    "twilio": {
-      "enabled": true,
-      "shared": {
-        "accountSid":            "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "authToken":             "your-auth-token",
-        "conversationServiceSid":"ISxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "webhook": {
-          "port":    3100,
-          "path":    "/sms2",
-          "baseUrl": "https://your-public-domain.example.com"
-        }
-      },
-      "fromNumber":          "+12125551234",
-      "messagingServiceSid": "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "dmPolicy":            "pairing"
-    }
-  }
-}
-```
-
-| Field | Where to find it | Required |
-|---|---|---|
-| `accountSid` | Twilio Console → top right account info | Yes |
-| `authToken` | Twilio Console → top right account info | Yes |
-| `conversationServiceSid` | Conversations → Manage → Services → your service → SID | Yes (if no default) |
-| `webhook.baseUrl` | Your public domain (ngrok URL, reverse proxy, etc.) | Yes |
-| `webhook.path` | Whatever path your reverse proxy forwards | Yes |
-| `webhook.port` | Local port the plugin listens on | Yes |
-| `fromNumber` | Your Twilio phone number in E.164 format | Yes |
-| `messagingServiceSid` | Messaging → Services → your service → SID | Recommended |
+**"Could not configure address" in logs**
+Credentials wrong, or server has no outbound internet access to reach Twilio API.
