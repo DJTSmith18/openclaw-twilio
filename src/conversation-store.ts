@@ -58,7 +58,10 @@ export type ConversationRow = {
 // ── Timezone-aware timestamp ────────────────────────────────────────────────
 
 function torontoTimestamp(): string {
-  return new Date().toLocaleString("en-CA", {
+  // Build an ISO-parseable timestamp in America/Toronto.
+  // Intl gives us the offset so new Date() can parse it back.
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Toronto",
     year: "numeric",
     month: "2-digit",
@@ -67,7 +70,13 @@ function torontoTimestamp(): string {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  }).replace(",", "") + " America/Toronto";
+    timeZoneName: "longOffset",
+  }).formatToParts(now);
+
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const offset = get("timeZoneName"); // e.g. "GMT-04:00" or "GMT-05:00"
+  const iso = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}${offset.replace("GMT", "")}`;
+  return iso;
 }
 
 // ── Phone normalization (voipms-compatible: last 10 digits) ─────────────────
