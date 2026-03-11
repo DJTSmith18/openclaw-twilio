@@ -55,6 +55,21 @@ export type ConversationRow = {
   created_at: string;
 };
 
+// ── Timezone-aware timestamp ────────────────────────────────────────────────
+
+function torontoTimestamp(): string {
+  return new Date().toLocaleString("en-CA", {
+    timeZone: "America/Toronto",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).replace(",", "") + " America/Toronto";
+}
+
 // ── Phone normalization (voipms-compatible: last 10 digits) ─────────────────
 
 function normalizePhone10(phone: string): string {
@@ -89,14 +104,15 @@ export function createTwilioConversationStore(params: {
       await ready;
       await dbRun(
         `INSERT INTO twilio_conversations
-           (phone_number, did, account_id, direction, message, chat_type, context)
-         VALUES (?, ?, ?, 'inbound', '', ?, ?)`,
+           (phone_number, did, account_id, direction, message, chat_type, context, created_at)
+         VALUES (?, ?, ?, 'inbound', '', ?, ?, ?)`,
         [
           normalizePhone10(reference.from),
           reference.to,
           accountId,
           reference.isGroup ? "group" : "direct",
           `ref:${key}`,
+          torontoTimestamp(),
         ],
       );
     },
@@ -209,8 +225,8 @@ export function createTwilioConversationStore(params: {
       await ready;
       await dbRun(
         `INSERT INTO twilio_conversations
-           (phone_number, did, account_id, agent, direction, message, media_url, message_sid, chat_type, status, context, conversation_sid)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (phone_number, did, account_id, agent, direction, message, media_url, message_sid, chat_type, status, context, conversation_sid, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           normalizePhone10(p.phoneNumber),
           p.did,
@@ -224,6 +240,7 @@ export function createTwilioConversationStore(params: {
           p.status ?? null,
           p.context ?? `twilio-channel-${p.direction}`,
           p.conversationSid ?? null,
+          torontoTimestamp(),
         ],
       );
     },
