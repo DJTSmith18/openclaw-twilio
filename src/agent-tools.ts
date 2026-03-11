@@ -1,16 +1,15 @@
-import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { createTwilioConversationStore, lookupContact } from "./conversation-store.js";
-import { getConversationBySid } from "./db.js";
+import type { AnyAgentTool } from "openclaw/plugin-sdk";
+import { getThreadByConversationSid, getConversationBySid } from "./db.js";
+import { lookupContact } from "./conversation-store.js";
 import { normalizeE164 } from "./normalize.js";
 
 /**
  * Build the twilio_get_conversation_context agent tool.
  *
- * The agent calls this tool to retrieve recent message history for the
- * current conversation.  The inbound payload includes the ConversationSid
- * and DID so the agent knows which conversation to query.
+ * Registered via api.registerTool() so it is available to the agent.
+ * Queries the local twilio_conversations table by conversation_sid.
  */
-export function createConversationContextTool(): ChannelAgentTool {
+export function createConversationContextTool(): AnyAgentTool {
   return {
     label: "Twilio Conversation Context",
     name: "twilio_get_conversation_context",
@@ -26,56 +25,31 @@ export function createConversationContextTool(): ChannelAgentTool {
             "The Twilio ConversationSid (CH...) to retrieve history for. " +
             "This is provided in the inbound message context.",
         },
-        did: {
-          type: "string",
-          description:
-            "Our phone number (DID) for this conversation. " +
-            "This is provided in the inbound message context.",
-        },
         limit: {
           type: "number",
           description:
             "Maximum number of recent messages to return (default 20, max 50).",
         },
       },
-      required: ["conversationSid", "did"],
+      required: ["conversationSid"],
     } as any,
 
     execute: async (_toolCallId: string, args: unknown) => {
-      const { conversationSid, did, limit: rawLimit } =
-        (args as { conversationSid?: string; did?: string; limit?: number }) ?? {};
+      const { conversationSid, limit: rawLimit } =
+        (args as { conversationSid?: string; limit?: number }) ?? {};
 
-      if (!conversationSid || !did) {
+      if (!conversationSid) {
         return {
           content: [
-            { type: "text", text: "Error: conversationSid and did are required." },
+            { type: "text", text: "Error: conversationSid is required." },
           ],
         };
       }
 
       const limit = Math.min(Math.max(rawLimit ?? 20, 1), 50);
 
-      // Look up conversation metadata from the conversation map
-      const convMeta = await getConversationBySid(conversationSid);
-
-      // Determine chat type and peer info from DB cache (if available)
-      const chatType = convMeta?.chatType ?? "direct";
-      const peerId = convMeta?.peerId;
-      const participants = convMeta?.participants;
-      const accountId = convMeta?.accountId ?? "default";
-
-      const store = createTwilioConversationStore({ accountId });
-
-      // For direct conversations, query by DID + peer phone number
-      // For group conversations, query by DID only (all participants)
-      const phoneNumber =
-        chatType === "direct" && peerId ? peerId : undefined;
-
-      const rows = await store.getThread({
-        did,
-        phoneNumber,
-        limit,
-      });
+      // Query messages directly by conversation_sid
+      const rows = await getThreadByConversationSid(conversationSid, limit);
 
       if (rows.length === 0) {
         return {
@@ -87,6 +61,11 @@ export function createConversationContextTool(): ChannelAgentTool {
           ],
         };
       }
+
+      // Look up conversation metadata for group participant info
+      const convMeta = await getConversationBySid(conversationSid);
+      const chatType = convMeta?.chatType ?? "direct";
+      const participants = convMeta?.participants;
 
       // Format messages in chronological order (oldest first)
       const chronological = [...rows].reverse();
@@ -157,14 +136,13 @@ export function createConversationContextTool(): ChannelAgentTool {
 export function buildConversationContextToolHint(params: {
   conversationSid: string;
   chatType: "direct" | "group";
-  did: string;
 }): string {
-  const { conversationSid, chatType, did } = params;
+  const { conversationSid, chatType } = params;
   return [
     `📋 CONVERSATION CONTEXT TOOL`,
     `To retrieve recent message history for this ${chatType} conversation, call the tool:`,
     `  Tool: twilio_get_conversation_context`,
-    `  Parameters: { "conversationSid": "${conversationSid}", "did": "${did}" }`,
+    `  Parameters: { "conversationSid": "${conversationSid}" }`,
     `This is useful when you need to recall earlier messages or context.`,
   ].join("\n");
 }

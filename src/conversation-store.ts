@@ -30,6 +30,7 @@ export type LogMessageParams = {
   chatType?: "direct" | "group";
   status?: string;
   context?: string;
+  conversationSid?: string;
 };
 
 export type GetThreadParams = {
@@ -208,8 +209,8 @@ export function createTwilioConversationStore(params: {
       await ready;
       await dbRun(
         `INSERT INTO twilio_conversations
-           (phone_number, did, account_id, agent, direction, message, media_url, message_sid, chat_type, status, context)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (phone_number, did, account_id, agent, direction, message, media_url, message_sid, chat_type, status, context, conversation_sid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           normalizePhone10(p.phoneNumber),
           p.did,
@@ -222,6 +223,7 @@ export function createTwilioConversationStore(params: {
           p.chatType ?? "direct",
           p.status ?? null,
           p.context ?? `twilio-channel-${p.direction}`,
+          p.conversationSid ?? null,
         ],
       );
     },

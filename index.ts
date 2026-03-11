@@ -2,6 +2,7 @@ import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { twilioPlugin } from "./src/channel.js";
 import { setTwilioRuntime } from "./src/runtime.js";
+import { createConversationContextTool } from "./src/agent-tools.js";
 
 const plugin = {
   id: "twilio",
@@ -11,6 +12,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setTwilioRuntime(api.runtime);
     api.registerChannel({ plugin: twilioPlugin as ChannelPlugin });
+    api.registerTool(createConversationContextTool());
   },
 };
 

@@ -90,6 +90,27 @@ CREATE INDEX IF NOT EXISTS idx_twilio_conv_did_phone
   ON twilio_conversations (did, phone_number);
 `;
 
+const TWILIO_CONVERSATIONS_CONV_SID_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS idx_twilio_conv_conversation_sid
+  ON twilio_conversations (conversation_sid)
+  WHERE conversation_sid IS NOT NULL;
+`;
+
+/**
+ * Add `conversation_sid` column to existing databases (idempotent ALTER TABLE).
+ */
+async function migrateAddConversationSid(): Promise<void> {
+  try {
+    await dbRun(
+      `ALTER TABLE twilio_conversations ADD COLUMN conversation_sid TEXT;`,
+    );
+  } catch (err: unknown) {
+    // "duplicate column name" = already migrated — ignore
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("duplicate column")) throw err;
+  }
+}
+
 /**
  * Conversation map — tracks Twilio ConversationSid (CH...) to account/peer/type.
  *
@@ -157,6 +178,8 @@ export function initDatabase(cfg?: TwilioConfig): Promise<void> {
     await dbRun(CONTACTS_TABLE_SQL);
     await dbRun(TWILIO_CONVERSATIONS_SQL);
     await dbRun(TWILIO_CONVERSATIONS_INDEX_SQL);
+    await migrateAddConversationSid();
+    await dbRun(TWILIO_CONVERSATIONS_CONV_SID_INDEX_SQL);
     await dbRun(TWILIO_CONVERSATION_MAP_SQL);
     await dbRun(TWILIO_CONVERSATION_MAP_INDEX_SQL);
 
@@ -310,4 +333,35 @@ export async function listGroupConversations(accountId: string): Promise<
     }
     return { conversationSid: r.conversation_sid, participants };
   });
+}
+
+/**
+ * Retrieve message thread by ConversationSid.
+ * Returns messages in descending order (newest first).
+ */
+export async function getThreadByConversationSid(
+  conversationSid: string,
+  limit: number = 20,
+): Promise<Array<{
+  id: number;
+  phone_number: string;
+  did: string;
+  account_id: string;
+  direction: string;
+  message: string;
+  media_url: string | null;
+  message_sid: string | null;
+  chat_type: string;
+  conversation_sid: string | null;
+  created_at: string;
+}>> {
+  await initDatabase();
+  return dbAll(
+    `SELECT id, phone_number, did, account_id, direction,
+            message, media_url, message_sid, chat_type, conversation_sid, created_at
+     FROM twilio_conversations
+     WHERE conversation_sid = ? AND context NOT LIKE 'ref:%'
+     ORDER BY created_at DESC LIMIT ?`,
+    [conversationSid, Math.min(Math.max(limit, 1), 50)],
+  );
 }

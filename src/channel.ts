@@ -22,7 +22,6 @@ import { twilioOnboardingAdapter } from "./onboarding.js";
 import { createTwilioConversationStore } from "./conversation-store.js";
 import { listGroupConversations } from "./db.js";
 import { monitorTwilioProvider } from "./monitor.js";
-import { createConversationContextTool } from "./agent-tools.js";
 
 function getTwilioSection(cfg: OpenClawConfig): TwilioConfig | undefined {
   return (cfg as any).channels?.twilio as TwilioConfig | undefined;
@@ -80,8 +79,6 @@ export const twilioPlugin: ChannelPlugin<ResolvedTwilioAccount> = {
       "- Conversation history: use the twilio_get_conversation_context tool with the ConversationSid to retrieve recent messages.",
     ],
   },
-
-  agentTools: [createConversationContextTool()],
 
   reload: { configPrefixes: ["channels.twilio"] },
   configSchema: buildChannelConfigSchema({} as any),

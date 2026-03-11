@@ -77,6 +77,7 @@ export async function sendConversationsMessage(params: {
         message: text ?? "",
         mediaUrl: mediaUrl ?? undefined,
         messageSid: message.sid,
+        conversationSid,
         context: "twilio-channel-outbound",
       });
     } catch {

@@ -293,6 +293,7 @@ export async function handleInboundMessage(
           mediaUrl: extractMedia(body)[0]?.url,
           messageSid,
           chatType,
+          conversationSid,
           context: "twilio-channel-inbound",
         });
       } catch {
@@ -365,7 +366,7 @@ export async function handleInboundMessage(
       }
       lines.push(`Message: ${messageText}`);
       lines.push("");
-      lines.push(buildConversationContextToolHint({ conversationSid, chatType, did: ourDid }));
+      lines.push(buildConversationContextToolHint({ conversationSid, chatType }));
       const agentMessageBody = lines.join("\n");
 
       // ── Media ────────────────────────────────────────────────────────
