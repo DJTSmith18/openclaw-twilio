@@ -7,7 +7,6 @@ import { createTwilioConversationStore, lookupContact } from "./conversation-sto
 import { getTwilioRuntime } from "./runtime.js";
 import { sendConversationsMessage } from "./send.js";
 import { upsertConversationMap, getConversationBySid } from "./db.js";
-import { buildConversationContextToolHint } from "./agent-tools.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
@@ -337,7 +336,19 @@ export async function handleInboundMessage(
           ? `👥 GROUP CONVERSATION — NOT PRIVATE`
           : `🔒 PRIVATE CONVERSATION`;
 
-      const lines = [header, ...senderLines];
+      const now = new Date();
+      const timestamp = now.toLocaleString("en-US", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+
+      const lines = [header, `Date/Time: ${timestamp}`, ...senderLines];
 
       // ── Participants list for group conversations ────────────────────
       if (chatType === "group" && groupParticipants && groupParticipants.length > 0) {
@@ -365,8 +376,8 @@ export async function handleInboundMessage(
         lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
       lines.push(`Message: ${messageText}`);
-      lines.push("");
-      lines.push(buildConversationContextToolHint({ conversationSid, chatType }));
+      lines.push(`ConversationSid: ${conversationSid}`);
+      lines.push(`To check previous messages in this conversation, call twilio_get_conversation_context with conversationSid "${conversationSid}".`);
       const agentMessageBody = lines.join("\n");
 
       // ── Media ────────────────────────────────────────────────────────

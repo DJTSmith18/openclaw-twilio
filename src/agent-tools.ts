@@ -128,21 +128,3 @@ export function createConversationContextTool(): AnyAgentTool {
     },
   };
 }
-
-/**
- * Build the context tool instructions block to include in the inbound
- * message payload so the agent knows how to retrieve conversation history.
- */
-export function buildConversationContextToolHint(params: {
-  conversationSid: string;
-  chatType: "direct" | "group";
-}): string {
-  const { conversationSid, chatType } = params;
-  return [
-    `📋 CONVERSATION CONTEXT TOOL`,
-    `To retrieve recent message history for this ${chatType} conversation, call the tool:`,
-    `  Tool: twilio_get_conversation_context`,
-    `  Parameters: { "conversationSid": "${conversationSid}" }`,
-    `This is useful when you need to recall earlier messages or context.`,
-  ].join("\n");
-}
