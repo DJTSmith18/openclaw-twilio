@@ -346,9 +346,10 @@ export async function handleInboundMessage(
         minute: "2-digit",
         second: "2-digit",
         hour12: true,
+        timeZone: "America/Toronto",
       });
 
-      const lines = [header, `Date/Time: ${timestamp}`, ...senderLines];
+      const lines = [header, `Date/Time: ${timestamp} (America/Toronto)`, ...senderLines];
 
       // ── Participants list for group conversations ────────────────────
       if (chatType === "group" && groupParticipants && groupParticipants.length > 0) {
