@@ -7,6 +7,7 @@ import { createTwilioConversationStore, lookupContact } from "./conversation-sto
 import { getTwilioRuntime } from "./runtime.js";
 import { sendConversationsMessage } from "./send.js";
 import { upsertConversationMap, getConversationBySid } from "./db.js";
+import { buildConversationContextToolHint } from "./agent-tools.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
 
@@ -363,6 +364,8 @@ export async function handleInboundMessage(
         lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
       lines.push(`Message: ${messageText}`);
+      lines.push("");
+      lines.push(buildConversationContextToolHint({ conversationSid, chatType, did: ourDid }));
       const agentMessageBody = lines.join("\n");
 
       // ── Media ────────────────────────────────────────────────────────
