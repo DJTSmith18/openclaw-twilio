@@ -153,12 +153,40 @@ export async function resolveOrCreateDirectConversation(params: {
     throw new Error(`No fromNumber configured for account ${accountId}`);
   }
 
-  await client.conversations.v1
-    .conversations(conversationSid)
-    .participants.create({
-      "messagingBinding.address": toPhone,
-      "messagingBinding.proxyAddress": fromNumber,
-    } as any);
+  try {
+    await client.conversations.v1
+      .conversations(conversationSid)
+      .participants.create({
+        "messagingBinding.address": toPhone,
+        "messagingBinding.proxyAddress": fromNumber,
+      } as any);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Twilio returns "already exists in Conversation CHxxx" when the binding
+    // is taken. Extract the existing ConversationSid and use it instead.
+    const match = msg.match(/Conversation (CH[0-9a-f]{32})/i);
+    if (match) {
+      const existingSid = match[1];
+      console.log(
+        `[twilio:send] binding already exists, reusing conversation ${existingSid} for ${toPhone}`,
+      );
+      // Cache the existing conversation so future lookups hit DB
+      await upsertConversationMap({
+        conversationSid: existingSid,
+        accountId,
+        chatType: "direct",
+        peerId: toPhone,
+      });
+      // Clean up the empty conversation we just created
+      try {
+        await client.conversations.v1.conversations(conversationSid).remove();
+      } catch {
+        // Non-fatal — orphaned empty conversation
+      }
+      return existingSid;
+    }
+    throw err;
+  }
 
   // Cache in DB
   await upsertConversationMap({
