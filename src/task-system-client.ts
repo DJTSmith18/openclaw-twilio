@@ -8,7 +8,7 @@ export interface PendingTask {
   priority: number;
   assigned_to_agent?: string;
   description?: string;
-  blocked_note?: string;
+  note?: string;
 }
 
 function httpGetJson(
@@ -23,6 +23,8 @@ function httpGetJson(
         data += chunk;
       });
       res.on("end", () => {
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300))
+          return reject(new Error(`HTTP ${res.statusCode}`));
         try {
           resolve(JSON.parse(data));
         } catch {
