@@ -9,11 +9,21 @@ import { sendConversationsMessage } from "./send.js";
 import { upsertConversationMap, getConversationBySid } from "./db.js";
 import type { Request, Response } from "express";
 import type { TwilioConfig } from "./types.js";
+import { createTaskClient, type TaskSystemClient } from "./task-system-client.js";
 
 // In-memory dedup set for onMessageAdded — prevents double-processing when
 // both Address Configuration and Conversation Service webhooks fire for the same message.
 const processedMessageSids = new Set<string>();
 const DEDUP_MAX = 500;
+
+// Task system client — lazy-initialized per config, cached after first call
+let _taskClient: TaskSystemClient | null | undefined; // undefined=not yet initialized
+function getTaskClient(cfg: OpenClawConfig): TaskSystemClient | null {
+  if (_taskClient === undefined) {
+    _taskClient = createTaskClient(cfg);
+  }
+  return _taskClient;
+}
 
 type InboundDeps = {
   cfg: OpenClawConfig;
@@ -376,6 +386,27 @@ export async function handleInboundMessage(
       if (chatType === "group" && newParticipants.length > 0) {
         lines.push(`⚠️ NEW PARTICIPANT(S) JOINED: ${newParticipants.join(", ")}`);
       }
+      // Pending task context (injected by task-system integration)
+      const tc = getTaskClient(cfg);
+      if (tc && normalizedFrom) {
+        try {
+          const pendingTasks = await tc.getPendingResponses(normalizedFrom);
+          if (pendingTasks.length > 0) {
+            lines.push("--- PENDING TASK CONTEXT ---");
+            for (const t of pendingTasks) {
+              const pri = ({ 1: "URGENT", 2: "HIGH", 3: "NORMAL", 4: "LOW" } as Record<number, string>)[t.priority] || "";
+              lines.push(`Task #${t.id} [${t.status}] ${pri}: "${t.title}"`);
+              if (t.blocked_note) lines.push(`  Note: ${t.blocked_note}`);
+            }
+            lines.push("ACTION REQUIRED: This message may be a response to one of the above tasks.");
+            lines.push("If it is: 1) call task_comment with the response, 2) call task_status to update (→ in_progress or done), 3) clear awaiting_response_from in metadata.");
+            lines.push("---");
+          }
+        } catch {
+          // Non-fatal — task system unavailable
+        }
+      }
+
       lines.push(`Message: ${messageText}`);
       lines.push(`ConversationSid: ${conversationSid}`);
       lines.push(`To check previous messages in this conversation, call twilio_get_conversation_context with conversationSid "${conversationSid}".`);

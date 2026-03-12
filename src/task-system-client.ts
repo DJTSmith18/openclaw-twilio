@@ -1,0 +1,79 @@
+import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+
+export interface PendingTask {
+  id: number;
+  title: string;
+  status: string;
+  priority: number;
+  assigned_to_agent?: string;
+  description?: string;
+  blocked_note?: string;
+}
+
+function httpGetJson(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, { headers, timeout: timeoutMs }, (res) => {
+      let data = "";
+      res.on("data", (chunk: string) => {
+        data += chunk;
+      });
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          reject(new Error("Invalid JSON"));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Timeout"));
+    });
+  });
+}
+
+export interface TaskSystemClient {
+  getPendingResponses(phone: string): Promise<PendingTask[]>;
+}
+
+export function createTaskClient(
+  cfg: OpenClawConfig,
+): TaskSystemClient | null {
+  const taskCfg = (cfg as any)?.plugins?.entries?.["task-system"]?.config
+    ?.webUI;
+  if (!taskCfg || taskCfg.enabled === false) return null;
+
+  const port = taskCfg.port || 18790;
+  const token = taskCfg.authToken || "";
+  let available: boolean | null = null; // null=untested, true/false=tested
+
+  return {
+    async getPendingResponses(phone: string): Promise<PendingTask[]> {
+      if (available === false) return [];
+      // Normalize E.164 to 10-digit for task system matching
+      const phone10 = phone.replace(/\D/g, "").slice(-10);
+      if (phone10.length < 10) return [];
+      try {
+        const headers: Record<string, string> = token
+          ? { Authorization: `Bearer ${token}` }
+          : {};
+        const result = (await httpGetJson(
+          `http://127.0.0.1:${port}/dashboard/api/tasks/pending-responses?contact=${encodeURIComponent(phone10)}`,
+          headers,
+          3000,
+        )) as any;
+        available = true;
+        return result?.tasks || [];
+      } catch {
+        if (available === null) available = false;
+        return [];
+      }
+    },
+  };
+}
