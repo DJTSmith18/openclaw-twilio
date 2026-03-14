@@ -41,7 +41,7 @@ function httpGetJson(
 }
 
 export interface TaskSystemClient {
-  getPendingResponses(phone: string): Promise<PendingTask[]>;
+  getPendingResponses(phone: string, conversationSid?: string): Promise<PendingTask[]>;
 }
 
 export function createTaskClient(
@@ -56,17 +56,20 @@ export function createTaskClient(
   let available: boolean | null = null; // null=untested, true/false=tested
 
   return {
-    async getPendingResponses(phone: string): Promise<PendingTask[]> {
+    async getPendingResponses(phone: string, conversationSid?: string): Promise<PendingTask[]> {
       if (available === false) return [];
       // Normalize E.164 to 10-digit for task system matching
       const phone10 = phone.replace(/\D/g, "").slice(-10);
-      if (phone10.length < 10) return [];
+      if (phone10.length < 10 && !conversationSid) return [];
       try {
         const headers: Record<string, string> = token
           ? { Authorization: `Bearer ${token}` }
           : {};
+        const params = new URLSearchParams();
+        if (phone10.length >= 10) params.set("contact", phone10);
+        if (conversationSid) params.set("conversation", conversationSid);
         const result = (await httpGetJson(
-          `http://127.0.0.1:${port}/dashboard/api/tasks/pending-responses?contact=${encodeURIComponent(phone10)}`,
+          `http://127.0.0.1:${port}/dashboard/api/tasks/pending-responses?${params.toString()}`,
           headers,
           3000,
         )) as any;

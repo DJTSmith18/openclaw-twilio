@@ -388,9 +388,9 @@ export async function handleInboundMessage(
       }
       // Pending task context (injected by task-system integration)
       const tc = getTaskClient(cfg);
-      if (tc && normalizedFrom) {
+      if (tc && (normalizedFrom || conversationSid)) {
         try {
-          const pendingTasks = await tc.getPendingResponses(normalizedFrom);
+          const pendingTasks = await tc.getPendingResponses(normalizedFrom || "", conversationSid);
           if (pendingTasks.length > 0) {
             lines.push("--- PENDING TASK CONTEXT ---");
             for (const t of pendingTasks) {
